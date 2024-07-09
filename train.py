@@ -175,14 +175,18 @@ class Trainer:
                 correct += pred.eq(target.view_as(pred)).sum().item()
                 self.true_labels.extend(target.cpu().numpy())
                 self.predictions.extend(pred.cpu().numpy())
+
         test_loss /= len(self.test_loader.dataset)
         accuracy = correct / len(self.test_loader.dataset)
         logging.info(f'Test Loss: {test_loss:.4f}, Accuracy: {accuracy:.4f}')
 
-        # Convert lists to numpy arrays before appending
-        self.history['true_labels'].append(np.array(self.true_labels))
+        # Concatenate all predictions into a single numpy array
+        predictions_np = np.concatenate(self.predictions)
         # Convert predictions to a single string representation
-        predictions_str = np.array2string(np.array(self.predictions), separator=',')[1:-1]  # Remove the square brackets
+        predictions_str = np.array2string(predictions_np, separator=',')[1:-1]  # Remove the square brackets
+
+        # Append to history
+        self.history['true_labels'].append(np.array(self.true_labels))
         self.history['predictions'].append(predictions_str)
         self.model.train()
 

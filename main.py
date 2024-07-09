@@ -21,9 +21,11 @@ logging.info("Main script started.")
 # Use the get_all_datasets static method from the DatasetLoader class to get the dictionary of all datasets
 datasets_dict = DatasetLoader.get_all_datasets()
 
-# device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')  # Determine device based on GPU availability
-# device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')  # Determine device based on GPU availability
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  # Determine device based on GPU availability
+# device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+# Determine device based on GPU availability -> linux server
+device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+# Determine device based on GPU availability -> using local computer with gpu
+# device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  # Determine device based on GPU availability
 
 models_dict = ModelLoader(device)  # Pass device argument when creating ModelLoader instance
 optimizers_dict = OptimizerLoader()
@@ -31,7 +33,7 @@ lr_scheduler_loader = LRSchedulerLoader()  # Initialize LRSchedulerLoader
 
 # Define a single set of hyperparameters to be used for all datasets
 hyperparams = {
-    'epochs': 10,
+    'epochs': 150,
     'lr': 0.001,
     'momentum': 0.9,
     'patience': 5,
@@ -67,20 +69,9 @@ for dataset_name, dataset_loader in datasets_dict.items():
         device
     )
 
-    # Iterate over each model in models_dict
-    for model_name in models_dict.models_dict.keys():
-        # Dynamically get the model using the model_name
-        model = models_dict.get_model(model_name, input_channels=input_channels)
-        criterion = torch.nn.CrossEntropyLoss()
-        optimizer = optimizers_dict.get_optimizer(hyperparams['optimizer'], model.parameters(), lr=hyperparams['lr'])
-
-        # Set CrossValidator parameters dynamically in task_handler
-        task_handler.cross_validator = CrossValidator(train_dataset, model, criterion, optimizer, hyperparams)
-
-        # Choose the task to execute
-        if task_to_run == 'train':
-            task_handler.run_train()
-        elif task_to_run == 'attack':
-            task_handler.run_attack()
-        elif task_to_run == 'defense':
-            task_handler.run_defense()
+    if task_to_run == 'train':
+        task_handler.run_train()
+    elif task_to_run == 'attack':
+        task_handler.run_attack()
+    elif task_to_run == 'defense':
+        task_handler.run_defense()

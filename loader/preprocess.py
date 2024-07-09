@@ -62,9 +62,9 @@ class Preprocessor:
             transforms.RandomHorizontalFlip(),
             transforms.RandomRotation(10),
             transforms.RandomResizedCrop(224),
-            # self.de_texturize_transform(),
-            # self.de_colorize_transform(),
-            # self.edge_enhance_transform(),
+            self.de_texturize_transform(),
+            self.de_colorize_transform(),
+            self.edge_enhance_transform(),
         ]
         to_tensor_transform = transforms.ToTensor()
         tensor_transform_list = [
@@ -158,6 +158,27 @@ class Preprocessor:
             class_counts[label] += 1
         logging.info(f"Classes: {classes}")
         logging.info(f"Class counts: {class_counts}")
+
+    # @staticmethod
+    # def calculate_basic_statistics(dataset):
+    #     data_list = []
+    #     for data, _ in dataset:
+    #         if isinstance(data, np.ndarray):
+    #             data_list.append(data)
+    #         elif isinstance(data, np.memmap):
+    #             data_list.append(data)
+    #         else:
+    #             raise TypeError(f"Unsupported data type encountered: {type(data)}")
+    #
+    #     data_array = np.array(data_list)
+    #     mean = np.mean(data_array, axis=0)
+    #     median = np.median(data_array, axis=0)
+    #     std_dev = np.std(data_array, axis=0)
+    #     global_mean = np.mean(mean)
+    #     global_median = np.mean(median)
+    #     global_std_dev = np.mean(std_dev)
+    #     logging.info(
+    #         f"Global Mean: {global_mean}, Global Median: {global_median}, Global Standard Deviation: {global_std_dev}")
 
     @staticmethod
     def calculate_basic_statistics(dataset):

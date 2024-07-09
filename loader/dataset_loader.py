@@ -5,6 +5,7 @@ import logging
 
 import numpy
 import numpy as np
+import pandas as pd
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import datasets, transforms
@@ -22,9 +23,10 @@ class DatasetLoader:
         self.datasets_dict = {
             # 'mnist': self.load_mnist,
             # 'med': self.load_med,
-            'ccts': self.load_ccts,
+            # 'miccai_brats2020': self.load_miccai_brats2020,
+            # 'ccts': self.load_ccts,
             # 'tbcr': self.load_tbcr,
-            # 'scisic': self.load_scisic,
+            'scisic': self.load_scisic,
 
             # Add more datasets here...
         }
@@ -37,9 +39,10 @@ class DatasetLoader:
         return {
             # 'mnist': DatasetLoader('mnist', data_dir),
             # 'med': DatasetLoader('med', data_dir),
-            'ccts': DatasetLoader('ccts', data_dir),
+            # 'miccai_brats2020': DatasetLoader('miccai_brats2020', data_dir),
+            # 'ccts': DatasetLoader('ccts', data_dir),
             # 'tbcr': DatasetLoader('tbcr', data_dir),
-            # 'scisic': DatasetLoader('scisic', data_dir),
+            'scisic': DatasetLoader('scisic', data_dir),
         }
 
     def load(self):
@@ -108,12 +111,41 @@ class DatasetLoader:
         valid_dataset = ImageFolder(valid_dir, transform=transform)
         return train_dataset, test_dataset, valid_dataset, train_dataset.classes
 
+    def load_miccai_brats2020(self):
+        train_dir = os.path.join(self.data_dir, 'miccai_brats2020', 'MICCAI_BraTS2020_TrainingData')
+        val_dir = os.path.join(self.data_dir, 'miccai_brats2020', 'MICCAI_BraTS2020_ValidationData')
+        name_mapping = os.path.join(train_dir, 'name_mapping.csv')
+        survival_info = os.path.join(train_dir, 'survival_info.csv')
+        name_mapping_val = os.path.join(val_dir, 'name_mapping_validation_data.csv')
+        survival_eval = os.path.join(val_dir, 'survival_evaluation.csv')
+
+        train_dataset = self.CustomImageDataset(train_dir, name_mapping, survival_info)
+        val_dataset = self.CustomImageDataset(val_dir, name_mapping_val, survival_eval, validation=True)
+
+        # Check if val_dataset and test_dataset exist
+        if val_dataset.__len__() > 0:
+            train_dataset = train_dataset + val_dataset
+            return train_dataset, None, None, None
+
+        train_dataset, val_split_dataset, test_dataset = self.split_dataset(train_dataset)
+        return train_dataset, val_split_dataset, test_dataset, None
+
     @staticmethod
     def split_dataset(dataset):
-        train_size = int(0.7 * len(dataset))  # 70% of the dataset for training
-        val_size = int(0.15 * len(dataset))  # 15% of the dataset for validation
-        test_size = len(dataset) - train_size - val_size  # 15% of the dataset for testing
-        train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
+        if dataset is None:
+            return None, None, None
+
+        if isinstance(dataset, tuple):
+            train_dataset = dataset[0]
+            val_dataset = dataset[1]
+            test_dataset = dataset[2]
+        else:
+            train_size = int(0.7 * len(dataset))  # 70% of the dataset for training
+            val_size = int(0.15 * len(dataset))  # 15% of the dataset for validation
+            test_size = len(dataset) - train_size - val_size  # Remaining for testing
+
+            train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
+
         return train_dataset, val_dataset, test_dataset
 
     def get_and_print_classes(self):
@@ -148,32 +180,34 @@ class DatasetLoader:
         logging.info(f"All class counts: {class_counts}")
 
     class CustomImageDataset(Dataset):
-        def __init__(self, root_dir=None, transform=None, data=None, length=None):
+        def __init__(self, root_dir, name_mapping_file, survival_info_file, transform=None, validation=False):
+            self.root_dir = root_dir
             self.transform = transform
-            if root_dir is not None:
-                self.root_dir = root_dir
-                self.image_paths = [os.path.join(root_dir, fname) for fname in os.listdir(root_dir)]
-                self.labels = [int(fname.split('_')[1].split('.')[0]) for fname in os.listdir(root_dir)]
-            elif data is not None:
-                self.image_data = data
-                self.length = length
-            else:
-                raise ValueError("Either root_dir or data must be provided.")
+            self.image_paths = []
+            self.labels = []
+            self.load_data(root_dir, name_mapping_file, survival_info_file, validation)
+
+        def load_data(self, root_dir, name_mapping_file, survival_info_file, validation):
+            name_mapping = pd.read_csv(name_mapping_file)
+            survival_info = pd.read_csv(survival_info_file)
+
+            for _, row in name_mapping.iterrows():
+                subject_id = row['BraTS_2020_subject_ID']
+                subject_dir = os.path.join(root_dir, str(subject_id))
+                for file in os.listdir(subject_dir):
+                    if file.endswith('.nii'):
+                        self.image_paths.append(os.path.join(subject_dir, file))
+                        if 'seg' in file:
+                            self.labels.append(subject_id)
 
         def __len__(self):
-            return len(self.image_paths) if hasattr(self, 'image_paths') else self.length
+            return len(self.image_paths)
 
         def __getitem__(self, idx):
-            if hasattr(self, 'root_dir'):
-                image_path = self.image_paths[idx]
-                image = Image.open(image_path).convert('RGB')
-                label = self.labels[idx]
-            else:
-                image, label = self.image_data[idx]
-                if not isinstance(image, Image.Image):
-                    image = Image.fromarray(image).convert('RGB')
-
+            image_path = self.image_paths[idx]
+            image = nib.load(image_path).get_fdata()
+            image = np.expand_dims(image, axis=0)
+            label = self.labels[idx]
             if self.transform:
                 image = self.transform(image)
-
             return image, label

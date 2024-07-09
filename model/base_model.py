@@ -18,7 +18,7 @@ class ModelLoader:
             'alexnet': AlexNetModel,
             # 'resnet18': ResNet18,
             # 'resnet34': ResNet34,
-            'resnet50': ResNet50,
+            # 'resnet50': ResNet50,
             # 'resnet101': ResNet101,
             # 'resnet152': ResNet152,
             # 'transformer': TransformerModel,

@@ -43,29 +43,23 @@ class TaskHandler:
 
         for dataset_name, dataset_loader in self.datasets_dict.items():
             logging.info(f"Processing dataset: {dataset_name}")
-            train_dataset, val_dataset, test_dataset= dataset_loader.load()
+            train_dataset, val_dataset, test_dataset = dataset_loader.load()
             input_channels = self.input_channels_dict.get(dataset_name)
             logging.info(f"Input channels for {dataset_name}: {input_channels}")
 
             model_list = []
             model_names_list = []
-            model_keys = self.models_loader.models_dict.keys()
-            if not model_keys:
-                logging.error("No models found in models_dict.")
-                return
-
             true_labels_dict = {}
             predictions_dict = {}
 
             evaluator = None
-            for model_name in model_keys:
+            for model_name in self.models_loader.models_dict.keys():
                 logging.info(f"Loading model: {model_name}")
                 model, trainer = self.train_and_evaluate_model(model_name, dataset_name,
                                                                train_dataset, val_dataset, test_dataset,
-                                                               input_channels)  # Ensure the model is trained
+                                                               input_channels)
                 model_list.append(model)
                 model_names_list.append(model_name)
-                # Get true labels and predictions from the trainer
                 true_labels, predictions = trainer.get_test_results()
                 true_labels_dict[model_name] = true_labels
                 predictions_dict[model_name] = predictions
