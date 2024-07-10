@@ -33,7 +33,7 @@ lr_scheduler_loader = LRSchedulerLoader()  # Initialize LRSchedulerLoader
 
 # Define a single set of hyperparameters to be used for all datasets
 hyperparams = {
-    'epochs': 150,
+    'epochs': 2,
     'lr': 0.001,
     'momentum': 0.9,
     'patience': 5,

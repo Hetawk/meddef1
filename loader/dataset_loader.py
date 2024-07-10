@@ -24,8 +24,8 @@ class DatasetLoader:
             # 'mnist': self.load_mnist,
             # 'med': self.load_med,
             # 'miccai_brats2020': self.load_miccai_brats2020,
-            # 'ccts': self.load_ccts,
-            # 'tbcr': self.load_tbcr,
+            'ccts': self.load_ccts,
+            'tbcr': self.load_tbcr,
             'scisic': self.load_scisic,
 
             # Add more datasets here...
@@ -40,8 +40,8 @@ class DatasetLoader:
             # 'mnist': DatasetLoader('mnist', data_dir),
             # 'med': DatasetLoader('med', data_dir),
             # 'miccai_brats2020': DatasetLoader('miccai_brats2020', data_dir),
-            # 'ccts': DatasetLoader('ccts', data_dir),
-            # 'tbcr': DatasetLoader('tbcr', data_dir),
+            'ccts': DatasetLoader('ccts', data_dir),
+            'tbcr': DatasetLoader('tbcr', data_dir),
             'scisic': DatasetLoader('scisic', data_dir),
         }
 
@@ -148,16 +148,16 @@ class DatasetLoader:
 
         return train_dataset, val_dataset, test_dataset
 
-    def get_and_print_classes(self):
-        *_, classes = self.load()
-        if classes is not None:
-            if isinstance(classes, list):
-                logging.info(f"Classes for dataset: {classes}")
-            else:
-                logging.info("Classes for dataset: The classes attribute is not a list.")
-            return classes
-        else:
-            raise ValueError("No classes found for dataset.")
+    # def get_and_print_classes(self):
+    #     *_, classes = self.load()
+    #     if classes is not None:
+    #         if isinstance(classes, list):
+    #             logging.info(f"Classes for dataset: {classes}")
+    #         else:
+    #             logging.info("Classes for dataset: The classes attribute is not a list.")
+    #         return classes
+    #     else:
+    #         raise ValueError("No classes found for dataset.")
 
     def get_input_channels(self):
         loaded_datasets = self.load()  # Renamed variable

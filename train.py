@@ -4,7 +4,8 @@
 import os
 import logging
 from datetime import datetime
-
+import gc
+import torch.cuda.amp as amp
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -70,6 +71,7 @@ class Trainer:
         patience_counter = 0
         total_batches = len(self.train_loader)
         log_points = [0, total_batches // 2, total_batches - 1]
+        #
 
         for epoch in range(epochs):
             epoch_loss = 0.0
@@ -180,14 +182,9 @@ class Trainer:
         accuracy = correct / len(self.test_loader.dataset)
         logging.info(f'Test Loss: {test_loss:.4f}, Accuracy: {accuracy:.4f}')
 
-        # Concatenate all predictions into a single numpy array
-        predictions_np = np.concatenate(self.predictions)
-        # Convert predictions to a single string representation
-        predictions_str = np.array2string(predictions_np, separator=',')[1:-1]  # Remove the square brackets
-
         # Append to history
-        self.history['true_labels'].append(np.array(self.true_labels))
-        self.history['predictions'].append(predictions_str)
+        self.history['true_labels'].append(self.true_labels)
+        self.history['predictions'].append(self.predictions)
         self.model.train()
 
     def validate(self):
@@ -213,7 +210,7 @@ class Trainer:
         logging.info(f'Model saved to {path}')
 
     def save_history_to_csv(self, filename):
-        filename = os.path.join("out",  self.task_name, self.dataset_name, filename)
+        filename = os.path.join("out", self.task_name, self.dataset_name, filename)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         # Ensure all history lists have the same length
         if not all(len(self.history[key]) == len(self.history['epoch']) for key in
@@ -221,13 +218,15 @@ class Trainer:
             raise ValueError("Lengths of history lists are not consistent.")
         # Add model_name to history for each epoch
         self.history['model_name'] = [self.model_name] * len(self.history['epoch'])
-        # Create DataFrame
-        df = pd.DataFrame(self.history)
+        # Convert lists to string representations for CSV saving
+        history_df = pd.DataFrame(self.history)
+        history_df['true_labels'] = history_df['true_labels'].apply(lambda x: ','.join(map(str, x)))
+        history_df['predictions'] = history_df['predictions'].apply(lambda x: ','.join(map(str, x)))
         # Write DataFrame to CSV
         if not os.path.isfile(filename):
-            df.to_csv(filename, index=False)  # Write with header if file does not exist
+            history_df.to_csv(filename, index=False)  # Write with header if file does not exist
         else:
-            df.to_csv(filename, mode='a', index=False, header=False)  # Append without header if file exists
+            history_df.to_csv(filename, mode='a', index=False, header=False)  # Append without header if file exists
         logging.info(f'Training history saved to {filename}')
 
     def get_test_results(self):

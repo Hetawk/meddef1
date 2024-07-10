@@ -16,12 +16,16 @@ class Evaluator:
         self.all_probabilities = all_probabilities
 
     def evaluate(self, dataset_name):
+        # Ensure true_labels and all_predictions are lists or arrays
+        if isinstance(self.true_labels, str):
+            self.true_labels = list(map(int, self.true_labels.split(',')))
+        if isinstance(self.all_predictions, str):
+            self.all_predictions = list(map(int, self.all_predictions.split(',')))
         metrics = Metrics.calculate_metrics(self.true_labels, self.all_predictions, self.all_probabilities)
 
         # Log and save metrics to CSV
         self.log_metrics(metrics)
         self.save_metrics(metrics, dataset_name)
-
 
         # Add results to self.results
         for i in range(len(self.true_labels)):

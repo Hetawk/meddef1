@@ -15,15 +15,15 @@ class ModelLoader:
     def __init__(self, device):
         self.device = device
         self.models_dict = {
-            'alexnet': AlexNetModel,
+            # 'alexnet': AlexNetModel,
             # 'resnet18': ResNet18,
             # 'resnet34': ResNet34,
-            # 'resnet50': ResNet50,
+            'resnet50': ResNet50,
             # 'resnet101': ResNet101,
             # 'resnet152': ResNet152,
             # 'transformer': TransformerModel,
             # 'conditional_diffusion': ConditionalDiffusionModel,
-            # 'densenet121': DenseNet121,
+            'densenet121': DenseNet121,
             # 'densenet169': DenseNet169,
             # 'densenet201': DenseNet201,
             # 'densenet264': DenseNet264,

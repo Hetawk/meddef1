@@ -33,7 +33,7 @@ class Preprocessor:
     def preprocess(self, train_dataset, val_dataset=None, test_dataset=None, input_channels=None):
         logging.info(f"Preprocessing data for {self.model_type} model with {input_channels} input channels.")
         self.summarize_dataset(train_dataset, val_dataset, test_dataset)
-        self.print_classes()
+        # self.print_classes()
         transform = self.get_transforms(input_channels, train_dataset)
         if train_dataset is not None:
             train_dataset.transform = transform
@@ -48,14 +48,14 @@ class Preprocessor:
             test_dataset = self.verify_labels(test_dataset)
         return train_dataset, val_dataset, test_dataset
 
-    def print_classes(self):
-        dataset_loader = DatasetLoader(self.dataset_name, self.data_dir)
-        try:
-            dataset_loader.get_and_print_classes()
-            dataset_loader.print_class_counts()
-        except ValueError as e:
-            logging.error(e)
-            raise
+    # def print_classes(self):
+    #     dataset_loader = DatasetLoader(self.dataset_name, self.data_dir)
+    #     try:
+    #         # dataset_loader.get_and_print_classes()
+    #         dataset_loader.print_class_counts()
+    #     except ValueError as e:
+    #         logging.error(e)
+    #         raise
 
     def get_transforms(self, input_channels, train_dataset=None):
         pil_transform_list = [
