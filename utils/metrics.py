@@ -1,18 +1,19 @@
 # metrics.py
 
 import numpy as np
-import pandas as pd
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score,
     f1_score, confusion_matrix, balanced_accuracy_score,
     matthews_corrcoef, roc_auc_score, average_precision_score
 )
-import logging
+from typing import Dict, Any, Optional
 
 class Metrics:
     @staticmethod
-    def calculate_metrics(true_labels, all_predictions, all_probabilities=None):
-        metrics = {}
+    def calculate_metrics(true_labels: np.ndarray,
+                          all_predictions: np.ndarray,
+                          all_probabilities: Optional[np.ndarray] = None) -> Dict[str, Any]:
+        metrics: Dict[str, Any] = {}
 
         metrics['accuracy'] = accuracy_score(true_labels, all_predictions)
         metrics['precision'] = precision_score(true_labels, all_predictions, average='macro', zero_division=0)

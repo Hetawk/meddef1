@@ -1,24 +1,23 @@
 # train.py
 
-
 import os
 import logging
 from datetime import datetime
-import gc
-import torch.cuda.amp as amp
-import numpy as np
 import torch
-import torch.nn.functional as F
 import pandas as pd
+import numpy as np
+from torch import nn
 
+from gan.defense.adv_train import AdversarialTraining
 from utils.robustness.regularization import Regularization
 from utils.timer import Timer
+from utils.algorithms.supervised import SupervisedLearning
 
 
 class Trainer:
     def __init__(self, model, train_loader, val_loader, test_loader, optimizer, criterion, model_name, task_name,
-                 dataset_name,device, lambda_l2=0.0, dropout_rate=0.5, alpha=0.01, attack_loader=None, scheduler=None,
-                 cross_validator=None):
+                 dataset_name, device, lambda_l2=0.0, dropout_rate=0.5, alpha=0.01, attack_loader=None,
+                 scheduler=None, cross_validator=None, adversarial=False):
         self.scheduler = scheduler
         self.cross_validator = cross_validator
         self.model = model
@@ -48,15 +47,17 @@ class Trainer:
         }
 
         self.device = device
-        self.model.to(self.device)  # Move model to GPU if available
+        self.model.to(self.device)
         self.has_trained = False
 
-        # Ensure dropout is applied at initialization
         Regularization.apply_dropout(self.model, self.dropout_rate)
 
-        # Initialize attributes for storing results
         self.true_labels = []
         self.predictions = []
+        self.supervised_learning = SupervisedLearning()
+        self.adversarial = adversarial
+        if adversarial:
+            self.adversarial_training = AdversarialTraining(model, criterion, epsilon=0.3, alpha=0.01)
 
     def train(self, epochs, patience=5, adversarial=False):
         if self.has_trained:
@@ -71,13 +72,14 @@ class Trainer:
         patience_counter = 0
         total_batches = len(self.train_loader)
         log_points = [0, total_batches // 2, total_batches - 1]
-        #
 
         for epoch in range(epochs):
             epoch_loss = 0.0
             correct = 0
             total = 0
             start_time = datetime.now()
+            epoch_true_labels = []
+            epoch_predictions = []
 
             for batch_idx, (data, target) in enumerate(self.train_loader):
                 data, target = data.to(self.device), target.to(self.device)
@@ -86,24 +88,16 @@ class Trainer:
                 output = self.model(data)
                 loss = self.criterion(output, target)
 
-                if adversarial:
-                    self.model.zero_grad()
-                    loss.backward(retain_graph=True)
-                    perturbed_data = data + self.alpha * data.grad.sign()
-                    perturbed_data = torch.clamp(perturbed_data, 0, 1)
-                    adv_output = self.model(perturbed_data)
-                    adv_loss = self.criterion(adv_output, target)
-                    if not torch.isnan(adv_loss):
-                        loss += adv_loss
+                if self.adversarial:
+                    adv_loss = self.adversarial_training.adversarial_loss(data, target)
+                    loss += adv_loss
 
-                # Apply L2 regularization
                 l2_reg = Regularization.apply_l2_regularization(self.model, self.lambda_l2,
                                                                 log_message=(batch_idx == 0))
                 loss = Regularization.integrate_regularization(loss, l2_reg, log_message=(batch_idx == 0))
 
                 self.optimizer.zero_grad()
                 loss.backward()
-                # Clip the gradient norm to prevent exploding gradients
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                 self.optimizer.step()
 
@@ -112,18 +106,20 @@ class Trainer:
                 correct += pred.eq(target.view_as(pred)).sum().item()
                 total += target.size(0)
 
+                epoch_true_labels.extend(target.cpu().numpy())
+                epoch_predictions.extend(pred.cpu().numpy())
+
                 if batch_idx in log_points:
                     accuracy = correct / total
                     end_time = datetime.now()
                     duration = Timer.format_duration((end_time - start_time).total_seconds())
                     logging.info(f'Epoch: {epoch + 1}/{self.epochs}, '
                                  f'Batch: {batch_idx * len(data)}/{len(self.train_loader.dataset)}, '
-                                 f'Loss: {loss.item():.4f}, Accuracy: {accuracy:.4f}, '
-                                 f'Duration: {duration} ')
+                                 f'Loss: {loss.item():.4f}, Accuracy: {accuracy:.4f} ')
 
             val_loss, val_accuracy = self.validate()
             accuracy = correct / total
-            epoch_loss /= len(self.train_loader)  # Calculate average loss for the epoch
+            epoch_loss /= len(self.train_loader)
             end_time = datetime.now()
             epoch_duration = Timer.format_duration((end_time - start_time).total_seconds())
             logging.info(f'Epoch: {epoch + 1}/{self.epochs}, Loss: {epoch_loss:.4f}, Accuracy: {accuracy:.4f}, '
@@ -136,8 +132,8 @@ class Trainer:
             self.history['duration'].append(epoch_duration)
             self.history['val_loss'].append(val_loss)
             self.history['val_accuracy'].append(val_accuracy)
-
-            self.test()
+            self.history['true_labels'].append(epoch_true_labels)
+            self.history['predictions'].append(epoch_predictions)
 
             if epoch_loss < best_loss or val_loss < best_loss:
                 best_loss = epoch_loss
@@ -151,16 +147,32 @@ class Trainer:
                 break
 
             if self.scheduler is not None:
-                self.scheduler.step(
-                    val_loss if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau) else None)
+                if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    self.scheduler.step(val_loss)
+                else:
+                    self.scheduler.step()
 
+            if self.cross_validator:
+                self.cross_validator.run()
+        logging.info(f"Finished training {self.model_name}.")
+        self.test()
         self.save_history_to_csv("training_history.csv")
 
-    def cross_validate(self, num_folds=5):
-        if self.cross_validator is not None:
-            cross_validator = self.cross_validator(self.train_loader.dataset, self.model, self.criterion,
-                                                   self.optimizer, num_folds=num_folds)
-            cross_validator.run()
+    def validate(self):
+        self.model.eval()
+        val_loss = 0
+        correct = 0
+        with torch.no_grad():
+            for data, target in self.val_loader:
+                data, target = data.to(self.device), target.to(self.device)
+                output = self.model(data)
+                val_loss += self.criterion(output, target).item()
+                pred = output.argmax(dim=1, keepdim=True)
+                correct += pred.eq(target.view_as(pred)).sum().item()
+        val_loss /= len(self.val_loader.dataset)
+        accuracy = correct / len(self.val_loader.dataset)
+        self.model.train()
+        return val_loss, accuracy
 
     def test(self):
         self.model.eval()
@@ -182,26 +194,9 @@ class Trainer:
         accuracy = correct / len(self.test_loader.dataset)
         logging.info(f'Test Loss: {test_loss:.4f}, Accuracy: {accuracy:.4f}')
 
-        # Append to history
-        self.history['true_labels'].append(self.true_labels)
-        self.history['predictions'].append(self.predictions)
+        self.history['true_labels'][-1] = self.true_labels
+        self.history['predictions'][-1] = self.predictions
         self.model.train()
-
-    def validate(self):
-        self.model.eval()
-        val_loss = 0
-        correct = 0
-        with torch.no_grad():
-            for data, target in self.val_loader:
-                data, target = data.to(self.device), target.to(self.device)
-                output = self.model(data)
-                val_loss += self.criterion(output, target).item()
-                pred = output.argmax(dim=1, keepdim=True)
-                correct += pred.eq(target.view_as(pred)).sum().item()
-        val_loss /= len(self.val_loader.dataset)
-        accuracy = correct / len(self.val_loader.dataset)
-        self.model.train()
-        return val_loss, accuracy
 
     def save_model(self, path):
         path = os.path.join("out", self.task_name, self.dataset_name, path)
@@ -212,22 +207,36 @@ class Trainer:
     def save_history_to_csv(self, filename):
         filename = os.path.join("out", self.task_name, self.dataset_name, filename)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        # Ensure all history lists have the same length
-        if not all(len(self.history[key]) == len(self.history['epoch']) for key in
-                   ['loss', 'accuracy', 'duration']):
-            raise ValueError("Lengths of history lists are not consistent.")
-        # Add model_name to history for each epoch
+
+        keys_to_check = ['loss', 'accuracy', 'duration', 'val_loss', 'val_accuracy', 'true_labels', 'predictions']
+        for key in keys_to_check:
+            if len(self.history[key]) != len(self.history['epoch']):
+                raise ValueError(
+                    f"Length of {key} ({len(self.history[key])}) does not match length of 'epoch' ({len(self.history['epoch'])}).")
+
+        if len(self.history['true_labels']) != len(self.history['predictions']):
+            raise ValueError(
+                f"Length of true_labels ({len(self.history['true_labels'])}) does not match length of predictions ({len(self.history['predictions'])}).")
+
         self.history['model_name'] = [self.model_name] * len(self.history['epoch'])
-        # Convert lists to string representations for CSV saving
+
         history_df = pd.DataFrame(self.history)
         history_df['true_labels'] = history_df['true_labels'].apply(lambda x: ','.join(map(str, x)))
         history_df['predictions'] = history_df['predictions'].apply(lambda x: ','.join(map(str, x)))
-        # Write DataFrame to CSV
+
         if not os.path.isfile(filename):
-            history_df.to_csv(filename, index=False)  # Write with header if file does not exist
+            history_df.to_csv(filename, index=False)
         else:
-            history_df.to_csv(filename, mode='a', index=False, header=False)  # Append without header if file exists
+            history_df.to_csv(filename, mode='a', index=False, header=False)
+
         logging.info(f'Training history saved to {filename}')
 
     def get_test_results(self):
-        return self.true_labels, self.predictions
+        # Convert true_labels and predictions to NumPy arrays
+        return np.array(self.true_labels), np.array(self.predictions)
+
+    def load_model(self, path):
+        self.model.load_state_dict(torch.load(path))
+        self.model.to(self.device)
+        self.model.eval()
+        logging.info(f"Loaded model from {path}")

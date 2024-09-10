@@ -5,7 +5,7 @@ import logging
 
 
 class ResidualBlock(nn.Module):
-    expansion = 1  # Adding the expansion attribute
+    expansion = 1
     logged = False
 
     def __init__(self, in_channels, out_channels, stride=1):
@@ -26,7 +26,6 @@ class ResidualBlock(nn.Module):
         if not self.logged and torch.cuda.current_device() == 0:  # Only log for the first GPU to reduce clutter
             logging.info("Forward pass in ResidualBlock.")
             self.logged = True  # Set this to True after the first log
-        # logging.debug("Forward pass in ResidualBlock.")
         residual = x
         out = self.conv1(x)
         out = self.bn1(out)
@@ -83,9 +82,11 @@ class ResNeXtBlock(nn.Module):
 
 
 class ResNeXtModel(nn.Module):
-    def __init__(self, block, layers, cardinality, num_classes=1000, input_channels=3, pretrained=False):
+    def __init__(self, block, layers, cardinality, num_classes, input_channels=3, pretrained=False):
         super(ResNeXtModel, self).__init__()
         self.in_channels = 64
+        self.block_expansion = block.expansion
+        self.layers = layers  # Add this line to store the layers structure
         self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
@@ -95,10 +96,10 @@ class ResNeXtModel(nn.Module):
         self.layer3 = self.make_layer(block, 256, layers[2], cardinality, stride=2)
         self.layer4 = self.make_layer(block, 512, layers[3], cardinality, stride=2)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
+        self.fc = nn.Linear(512 * self.block_expansion, num_classes)
 
         if pretrained:
-            self.load_pretrained_weights(input_channels)
+            self.load_pretrained_weights(input_channels, num_classes)
 
     def forward(self, x):
         x = self.conv1(x)
@@ -121,33 +122,42 @@ class ResNeXtModel(nn.Module):
         layers.append(block(self.in_channels, out_channels, cardinality, stride))
         self.in_channels = out_channels * block.expansion
         for _ in range(1, blocks):
-            layers.append(block(self.in_channels, out_channels, cardinality, 1))
+            layers.append(block(self.in_channels, out_channels, cardinality))
         return nn.Sequential(*layers)
 
-    def load_pretrained_weights(self, input_channels):
-        # Load pretrained weights from torchvision models
-        pretrained_model = models.resnext50_32x4d(pretrained=True)
-
-        if input_channels == 3:
-            self.conv1.load_state_dict(pretrained_model.conv1.state_dict())
+    def load_pretrained_weights(self, input_channels, num_classes):
+        # Correctly choose the pretrained model based on the architecture
+        if self.block_expansion == 2 and sum(self.layers) == 16:  # ResNeXt50
+            pretrained_model = models.resnext50_32x4d(pretrained=True)
+        elif self.block_expansion == 2 and sum(self.layers) == 30:  # ResNeXt101 32x8d
+            pretrained_model = models.resnext101_32x8d(pretrained=True)
+        elif self.block_expansion == 2 and sum(self.layers) == 32:  # ResNeXt101 64x4d
+            pretrained_model = models.resnext101_64x4d(pretrained=True)
         else:
-            # For non-standard input channels, initialize the weights of the first conv layer
+            raise ValueError("Unsupported architecture for loading pretrained weights.")
+
+        # Load pretrained weights, excluding the final layer
+        model_dict = self.state_dict()
+        pretrained_dict = {k: v for k, v in pretrained_model.state_dict().items() if k in model_dict and 'fc' not in k}
+        model_dict.update(pretrained_dict)
+        self.load_state_dict(model_dict)
+
+        # Adjust the first convolutional layer if the input channels are not 3
+        if input_channels != 3:
+            self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
             nn.init.kaiming_normal_(self.conv1.weight, mode='fan_out', nonlinearity='relu')
-        self.bn1.load_state_dict(pretrained_model.bn1.state_dict())
-        self.layer1.load_state_dict(pretrained_model.layer1.state_dict())
-        self.layer2.load_state_dict(pretrained_model.layer2.state_dict())
-        self.layer3.load_state_dict(pretrained_model.layer3.state_dict())
-        self.layer4.load_state_dict(pretrained_model.layer4.state_dict())
-        self.fc.load_state_dict(pretrained_model.fc.state_dict())
+
+        # Replace the final layer with a new one that matches the number of classes for your dataset
+        self.fc = nn.Linear(512 * self.block_expansion, num_classes)
 
 
-def ResNeXt50(cardinality=32, num_classes=1000, input_channels=3, pretrained=False):
+def ResNeXt50(cardinality=32, num_classes=None, input_channels=3, pretrained=False):
     return ResNeXtModel(ResNeXtBlock, [3, 4, 6, 3], cardinality, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained)
 
 
-def ResNeXt101(cardinality=32, num_classes=1000, input_channels=3, pretrained=False):
+def ResNeXt101_32x8d(cardinality=32, num_classes=None, input_channels=3, pretrained=False):
     return ResNeXtModel(ResNeXtBlock, [3, 4, 23, 3], cardinality, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained)
 
 
-def ResNeXt152(cardinality=32, num_classes=1000, input_channels=3, pretrained=False):
+def ResNeXt101_64x4d(cardinality=32, num_classes=None, input_channels=3, pretrained=False):
     return ResNeXtModel(ResNeXtBlock, [3, 8, 36, 3], cardinality, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained)

@@ -1,3 +1,4 @@
+# defense_loader.py
 from .adv_train import AdversarialTraining
 from .cert_defense import CertDefense
 from .def_distill import DefDistill
@@ -13,13 +14,13 @@ class DefenseLoader:
         self.model = model
         self.defenses_dict = {
             'adv_train': AdversarialTraining,
-            # 'cert_defense': CertDefense,
-            # 'def_distill': DefDistill,
-            # 'ensemble_adv_train': EnsembleAdvTrain,
-            # 'feat_denoising': FeatDenoising,
-            # 'feat_squeeze': FeatSqueeze,
-            # 'grad_mask': GradMask,
-            # 'randomization': Randomization,
+            'cert_defense': CertDefense,
+            'def_distill': DefDistill,
+            'ensemble_adv_train': EnsembleAdvTrain,
+            'feat_denoising': FeatDenoising,
+            'feat_squeeze': FeatSqueeze,
+            'grad_mask': GradMask,
+            'randomization': Randomization,
             # Add more defenses here as needed
         }
         logging.info("DefenseLoader initialized with defenses: " + ", ".join(self.defenses_dict.keys()))

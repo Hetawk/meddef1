@@ -40,7 +40,7 @@ class InvertedResidual(nn.Module):
 
 
 class MobileNetV2(nn.Module):
-    def __init__(self, num_classes=1000, width_mult=1.0, inverted_residual_setting=None, round_nearest=8, input_channels=3):
+    def __init__(self, num_classes, width_mult=1.0, inverted_residual_setting=None, round_nearest=8, input_channels=3):
         super(MobileNetV2, self).__init__()
         block = InvertedResidual
         input_channel = 32
@@ -102,17 +102,20 @@ class MobileNetV2(nn.Module):
         x = self.classifier(x)
         return x
 
+    def load_pretrained_weights(self, input_channels):
+        if input_channels == 3:
+            pretrained_model = mobilenet_v2(pretrained=True)
+            model_dict = self.state_dict()
+            pretrained_dict = {k: v for k, v in pretrained_model.state_dict().items() if k in model_dict}
+            model_dict.update(pretrained_dict)
+            self.load_state_dict(model_dict)
 
-def MobileNetV2Model(pretrained=False, input_channels=3):
-    model = MobileNetV2(input_channels=input_channels)
+
+def MobileNetV2Model(pretrained=False, input_channels=3, num_classes=None):
+    model = MobileNetV2(num_classes=num_classes, input_channels=input_channels)
     if pretrained:
-        pretrained_model = mobilenet_v2(pretrained=True)
-        model_dict = model.state_dict()
-        pretrained_dict = {k: v for k, v in pretrained_model.state_dict().items() if k in model_dict}
-        model_dict.update(pretrained_dict)
-        model.load_state_dict(model_dict)
+        model.load_pretrained_weights(input_channels)
     return model
-
 
 
 class hswish(nn.Module):
@@ -168,31 +171,8 @@ class InvertedResidualConfig:
         self.se_planes = se_planes
 
 
-class InvertedResidual(nn.Module):
-    def __init__(self, cnf):
-        super(InvertedResidual, self).__init__()
-        hidden_dim = round(cnf.inplanes * cnf.expand_ratio)
-        self.use_res_connect = cnf.stride == 1 and cnf.inplanes == cnf.outplanes
-        layers = []
-        if cnf.expand_ratio != 1:
-            layers.append(ConvBNActivation(cnf.inplanes, hidden_dim, 1, 1))
-        layers.extend([
-            ConvBNActivation(hidden_dim, hidden_dim, cnf.kernel_size, cnf.stride, groups=hidden_dim),
-            SqueezeExcitation(hidden_dim, cnf.se_planes),
-            nn.Conv2d(hidden_dim, cnf.outplanes, 1, 1, 0, bias=False),
-            nn.BatchNorm2d(cnf.outplanes),
-        ])
-        self.conv = nn.Sequential(*layers)
-
-    def forward(self, x):
-        if self.use_res_connect:
-            return x + self.conv(x)
-        else:
-            return self.conv(x)
-
-
 class MobileNetV3(nn.Module):
-    def __init__(self, num_classes=1000, cfgs=None, input_channels=3):
+    def __init__(self, num_classes, cfgs=None, input_channels=3):
         super(MobileNetV3, self).__init__()
         self.cfgs = cfgs
         self.conv1 = ConvBNActivation(input_channels, 16, 3, 2)
@@ -216,8 +196,16 @@ class MobileNetV3(nn.Module):
         x = self.linear(x)
         return x
 
+    def load_pretrained_weights(self, input_channels):
+        if input_channels == 3:
+            pretrained_model = mobilenet_v3_small(pretrained=True)
+            model_dict = self.state_dict()
+            pretrained_dict = {k: v for k, v in pretrained_model.state_dict().items() if k in model_dict}
+            model_dict.update(pretrained_dict)
+            self.load_state_dict(model_dict)
 
-def MobileNetV3SmallModel(pretrained=False, input_channels=3):
+
+def MobileNetV3SmallModel(pretrained=False, input_channels=3, num_classes=None):
     cfgs = [
         InvertedResidualConfig(16, 16, 3, 2, 1, 4),
         InvertedResidualConfig(16, 24, 3, 2, 2, 3),
@@ -230,11 +218,7 @@ def MobileNetV3SmallModel(pretrained=False, input_channels=3):
         InvertedResidualConfig(48, 96, 5, 2, 2.5, 3),
         InvertedResidualConfig(96, 96, 5, 1, 2.5, 3),
     ]
-    model = MobileNetV3(cfgs=cfgs, input_channels=input_channels)
+    model = MobileNetV3(cfgs=cfgs, input_channels=input_channels, num_classes=num_classes)
     if pretrained:
-        pretrained_model = mobilenet_v3_small(pretrained=True)
-        model_dict = model.state_dict()
-        pretrained_dict = {k: v for k, v in pretrained_model.state_dict().items() if k in model_dict}
-        model_dict.update(pretrained_dict)
-        model.load_state_dict(model_dict)
+        model.load_pretrained_weights(input_channels)
     return model

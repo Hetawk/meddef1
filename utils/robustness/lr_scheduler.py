@@ -9,7 +9,6 @@ class LRSchedulerLoader:
             'StepLR': lr_scheduler.StepLR,
             'ExponentialLR': lr_scheduler.ExponentialLR,
             'ReduceLROnPlateau': lr_scheduler.ReduceLROnPlateau,
-            # Add other schedulers as needed
         }
         self.logger = logging.getLogger(__name__)
         self.logger.info("LRSchedulerLoader initialized with schedulers: " + ", ".join(self.schedulers_dict.keys()))

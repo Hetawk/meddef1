@@ -1,44 +1,46 @@
+# feat_denoising.py
 import torch
-import torch.nn.functional as F
-import logging
+import torch.nn as nn
+
 
 class FeatDenoising:
-    def __init__(self, model, train_loader, test_loader, denoise_strength=0.1):
+    def __init__(self, model, noise_std=0.1):
         self.model = model
-        self.train_loader = train_loader
-        self.test_loader = test_loader
-        self.denoise_strength = denoise_strength
-        logging.info("FeatDenoising initialized.")
+        self.noise_std = noise_std
+        self.criterion = nn.CrossEntropyLoss()
 
-    def train(self, epochs):
-        self.model.train()
-        optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
-        for epoch in range(epochs):
-            for data, target in self.train_loader:
-                data.requires_grad = True
-                output = self.model(data)
-                loss = F.cross_entropy(output, target)
-                self.model.zero_grad()
-                loss.backward()
-                # Apply feature denoising technique here
-                data = data + self.denoise_strength * torch.randn_like(data)
-                adv_output = self.model(data)
-                adv_loss = F.cross_entropy(adv_output, target)
-                total_loss = loss + adv_loss
-                total_loss.backward()
-                optimizer.step()
-            logging.info(f'Epoch {epoch+1}/{epochs} completed.')
+    def apply_noise(self, features):
+        """
+        Add Gaussian noise to the features.
+        """
+        noise = torch.normal(mean=0, std=self.noise_std, size=features.size()).to(features.device)
+        return features + noise
 
-    def test(self):
+    def extract_features(self, x):
+        """
+        Extract intermediate features from the model.
+        """
+        # Assuming the model has a feature extraction method. You may need to adjust this based on your model architecture.
         self.model.eval()
-        test_loss = 0
-        correct = 0
         with torch.no_grad():
-            for data, target in self.test_loader:
-                output = self.model(data)
-                test_loss += F.cross_entropy(output, target, reduction='sum').item()
-                pred = output.argmax(dim=1, keepdim=True)
-                correct += pred.eq(target.view_as(pred)).sum().item()
-        test_loss /= len(self.test_loader.dataset)
-        accuracy = 100. * correct / len(self.test_loader.dataset)
-        logging.info(f'Test set: Average loss: {test_loss:.4f}, Accuracy: {correct}/{len(self.test_loader.dataset)} ({accuracy:.0f}%)')
+            features = self.model.extract_features(x)
+        return features
+
+    def defend(self, adv_examples, adv_labels):
+        """
+        Apply feature denoising to adversarial examples and evaluate the model's performance.
+        """
+        features = self.extract_features(adv_examples)
+        noisy_features = self.apply_noise(features)
+
+        # Reconstruct the input from noisy features and run the model
+        # Assuming a function to reconstruct input from features is available
+        # If not, you may need to modify your model to handle this
+        noisy_examples = self.model.reconstruct_from_features(noisy_features)
+
+        with torch.no_grad():
+            outputs = self.model(noisy_examples)
+            _, predicted = torch.max(outputs, 1)
+            correct = (predicted == adv_labels).sum().item()
+
+        return self.model, correct, adv_examples.size(0)

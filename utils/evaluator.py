@@ -3,8 +3,10 @@
 import pandas as pd
 import os
 import logging
+import torch
+import numpy as np
+
 from utils.metrics import Metrics
-import pandas.errors
 
 class Evaluator:
     def __init__(self, model_name, results, true_labels, all_predictions, task_name, all_probabilities=None):
@@ -21,6 +23,15 @@ class Evaluator:
             self.true_labels = list(map(int, self.true_labels.split(',')))
         if isinstance(self.all_predictions, str):
             self.all_predictions = list(map(int, self.all_predictions.split(',')))
+        elif isinstance(self.all_predictions, list) and isinstance(self.all_predictions[0], torch.Tensor):
+            self.all_predictions = [pred.item() for pred in self.all_predictions]
+        elif isinstance(self.all_predictions, list) and isinstance(self.all_predictions[0], int):
+            self.all_predictions = self.all_predictions  # Already in the correct format
+
+        # Convert true_labels and all_predictions to NumPy arrays
+        self.true_labels = np.array(self.true_labels)
+        self.all_predictions = np.array(self.all_predictions)
+
         metrics = Metrics.calculate_metrics(self.true_labels, self.all_predictions, self.all_probabilities)
 
         # Log and save metrics to CSV
@@ -73,3 +84,4 @@ class Evaluator:
         metrics_df.to_csv(metrics_csv_path, index=False)
         logging.info(f"Metrics saved to {metrics_csv_path}")
 
+        return metrics

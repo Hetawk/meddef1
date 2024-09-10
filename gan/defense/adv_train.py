@@ -1,23 +1,27 @@
+# adv_train.py
+
 import torch
 
 class AdversarialTraining:
-    def __init__(self, model, criterion, optimizer, epochs):
+    def __init__(self, model, criterion, epsilon=0.3, alpha=0.01):
         self.model = model
         self.criterion = criterion
-        self.optimizer = optimizer
-        self.epochs = epochs
+        self.epsilon = epsilon  # Maximum perturbation
+        self.alpha = alpha  # Step size for gradient ascent
 
-    def defend(self, data, targets):
-        data, targets = data.to(self.model.device), targets.to(self.model.device)
+    def generate_adversarial_example(self, data, target):
+        data.requires_grad = True
+        output = self.model(data)
+        loss = self.criterion(output, target)
+        self.model.zero_grad()
+        loss.backward()
+        data_grad = data.grad.data
+        perturbed_data = data + self.alpha * data_grad.sign()
+        perturbed_data = torch.clamp(perturbed_data, 0, 1)
+        return perturbed_data
 
-        for epoch in range(self.epochs):
-            self.model.train()
-            self.optimizer.zero_grad()
-
-            outputs = self.model(data)
-            loss = self.criterion(outputs, targets)
-
-            loss.backward()
-            self.optimizer.step()
-
-        return data
+    def adversarial_loss(self, data, target):
+        adv_data = self.generate_adversarial_example(data, target)
+        adv_output = self.model(adv_data)
+        adv_loss = self.criterion(adv_output, target)
+        return adv_loss

@@ -3,6 +3,12 @@
 import matplotlib.pyplot as plt
 import os
 
+
+ # adversarial_examples.py
+
+import matplotlib.pyplot as plt
+import os
+
 def adversarial_examples(data, model_names):
     """
     Generates a visualization of original and adversarial examples for multiple models on a single figure.
@@ -32,7 +38,6 @@ def adversarial_examples(data, model_names):
             # Display original image
             original_image = original_images[model_idx][i].cpu().detach()
             print(f"Original image shape at model {model_name}, index {i}: {original_image.shape}")
-            print(f"Shape of original_images: {original_images.shape}")
 
 
             if original_image.dim() == 1:
@@ -88,6 +93,4 @@ def save_adversarial_examples(adv_examples, model_names, task_name, dataset_name
     fig = adversarial_examples(adv_examples, model_names)
     if fig is not None:
         fig.savefig(os.path.join(output_dir, 'adversarial_examples.png'))
-        plt.close(fig)  # Close the figure after saving
-
-
+        plt.close(fig)

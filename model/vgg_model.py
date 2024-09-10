@@ -26,7 +26,7 @@ class VGGBlock(nn.Module):
 
 
 class VGGModel(nn.Module):
-    def __init__(self, config, num_classes=1000, input_channels=3, pretrained=False):
+    def __init__(self, config, num_classes, input_channels=3, pretrained=False):
         super(VGGModel, self).__init__()
         self.features = self.make_layers(config, input_channels)
         self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
@@ -41,7 +41,7 @@ class VGGModel(nn.Module):
         )
 
         if pretrained:
-            self.load_pretrained_weights()
+            self.load_pretrained_weights(input_channels, num_classes)
 
     def forward(self, x):
         x = self.features(x)
@@ -64,26 +64,49 @@ class VGGModel(nn.Module):
                 in_channels = v
         return nn.Sequential(*layers)
 
-    def load_pretrained_weights(self):
+    def load_pretrained_weights(self, input_channels, num_classes):
+        # Load the VGG16 model from torchvision and adjust for input channels and num_classes
         pretrained_model = models.vgg16(pretrained=True)
-        self.load_state_dict(pretrained_model.state_dict())
+
+        if input_channels != 3:
+            # Handle non-standard input channels
+            self.features[0].weight.data = pretrained_model.features[0].weight.data.mean(dim=1,
+                                                                                         keepdim=True)  # Average RGB channels
+
+        # Load pretrained weights into the feature extractor
+        feature_dict = {k: v for k, v in pretrained_model.features.state_dict().items()}
+        self.features.load_state_dict(feature_dict, strict=False)
+
+        # Handle classifier adjustment
+        in_features = 512 * 7 * 7
+        self.classifier[0] = nn.Linear(in_features, 4096)
+        self.classifier[3] = nn.Linear(4096, 4096)
+        self.classifier[6] = nn.Linear(4096, num_classes)
+
+        # Optionally: log successful loading
+        if torch.cuda.is_available():
+            logging.info(
+                f"Pretrained weights loaded with input_channels={input_channels} and num_classes={num_classes} onto GPU.")
+        else:
+            logging.info(
+                f"Pretrained weights loaded with input_channels={input_channels} and num_classes={num_classes} onto CPU.")
 
 
-def VGG11(pretrained=False, input_channels=3, num_classes=1000):
+def VGG11(num_classes, input_channels=3, pretrained=False):
     config = [64, 'M', 128, 'M', 256, 256, 'M', 512, 512, 'M', 512, 512, 'M']
     return VGGModel(config, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained)
 
 
-def VGG13(pretrained=False, input_channels=3, num_classes=1000):
+def VGG13(num_classes, input_channels=3, pretrained=False):
     config = [64, 64, 'M', 128, 128, 'M', 256, 256, 'M', 512, 512, 'M', 512, 512, 'M']
     return VGGModel(config, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained)
 
 
-def VGG16(pretrained=False, input_channels=3, num_classes=1000):
+def VGG16(num_classes, input_channels=3, pretrained=False):
     config = [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M', 512, 512, 512, 'M']
     return VGGModel(config, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained)
 
 
-def VGG19(pretrained=False, input_channels=3, num_classes=1000):
+def VGG19(num_classes, input_channels=3, pretrained=False):
     config = [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 256, 'M', 512, 512, 512, 512, 'M', 512, 512, 512, 512, 'M']
     return VGGModel(config, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained)

@@ -1,44 +1,47 @@
+# feat_squeeze.py
 import torch
-import torch.nn.functional as F
-import logging
+import torch.nn as nn
+
 
 class FeatSqueeze:
-    def __init__(self, model, train_loader, test_loader, bit_depth=5):
+    def __init__(self, model, squeeze_factor=0.1):
         self.model = model
-        self.train_loader = train_loader
-        self.test_loader = test_loader
-        self.bit_depth = bit_depth
-        logging.info("FeatSqueeze initialized.")
+        self.squeeze_factor = squeeze_factor
+        self.criterion = nn.CrossEntropyLoss()
 
-    def train(self, epochs):
-        self.model.train()
-        optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01, momentum=0.9)
-        for epoch in range(epochs):
-            for data, target in self.train_loader:
-                data.requires_grad = True
-                output = self.model(data)
-                loss = F.cross_entropy(output, target)
-                self.model.zero_grad()
-                loss.backward()
-                # Apply feature squeezing technique here
-                data = (data * (2 ** self.bit_depth)).round() / (2 ** self.bit_depth)
-                adv_output = self.model(data)
-                adv_loss = F.cross_entropy(adv_output, target)
-                total_loss = loss + adv_loss
-                total_loss.backward()
-                optimizer.step()
-            logging.info(f'Epoch {epoch+1}/{epochs} completed.')
+    def squeeze_features(self, features):
+        """
+        Apply feature squeezing by reducing the precision of the features.
+        """
+        # Example: Apply quantization by reducing the precision of the features
+        squeezed_features = (features / self.squeeze_factor).round() * self.squeeze_factor
+        return squeezed_features
 
-    def test(self):
+    def extract_features(self, x):
+        """
+        Extract intermediate features from the model.
+        """
+        # Assuming the model has a feature extraction method. You may need to adjust this based on your model architecture.
         self.model.eval()
-        test_loss = 0
-        correct = 0
         with torch.no_grad():
-            for data, target in self.test_loader:
-                output = self.model(data)
-                test_loss += F.cross_entropy(output, target, reduction='sum').item()
-                pred = output.argmax(dim=1, keepdim=True)
-                correct += pred.eq(target.view_as(pred)).sum().item()
-        test_loss /= len(self.test_loader.dataset)
-        accuracy = 100. * correct / len(self.test_loader.dataset)
-        logging.info(f'Test set: Average loss: {test_loss:.4f}, Accuracy: {correct}/{len(self.test_loader.dataset)} ({accuracy:.0f}%)')
+            features = self.model.extract_features(x)
+        return features
+
+    def defend(self, adv_examples, adv_labels):
+        """
+        Apply feature squeezing to adversarial examples and evaluate the model's performance.
+        """
+        features = self.extract_features(adv_examples)
+        squeezed_features = self.squeeze_features(features)
+
+        # Reconstruct the input from squeezed features and run the model
+        # Assuming a function to reconstruct input from features is available
+        # If not, you may need to modify your model to handle this
+        squeezed_examples = self.model.reconstruct_from_features(squeezed_features)
+
+        with torch.no_grad():
+            outputs = self.model(squeezed_examples)
+            _, predicted = torch.max(outputs, 1)
+            correct = (predicted == adv_labels).sum().item()
+
+        return self.model, correct, adv_examples.size(0)

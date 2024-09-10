@@ -7,6 +7,7 @@ import numpy as np
 from sklearn.metrics import precision_recall_curve
 from sklearn.preprocessing import label_binarize
 
+
 def plot_precision_recall_curve(models, true_labels, predictions, class_names):
     n_classes = len(class_names)
     fig = plt.figure()  # Create a new figure
@@ -30,6 +31,7 @@ def plot_precision_recall_curve(models, true_labels, predictions, class_names):
     plt.title('Precision-Recall Curve')
     plt.grid(True)
     return fig
+
 
 def save_precision_recall_curve(models, true_labels, predictions, class_names, task_name, dataset_name):
     output_dir = os.path.join('out', task_name, dataset_name, 'visualization')

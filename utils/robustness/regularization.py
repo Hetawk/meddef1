@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import logging
 
+
 class Regularization:
     """
     A class for applying various regularization techniques to a model.

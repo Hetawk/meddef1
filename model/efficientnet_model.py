@@ -68,7 +68,7 @@ class MBConvBlock(nn.Module):
         return x / keep_prob * random_tensor
 
 class EfficientNet(nn.Module):
-    def __init__(self, width_coefficient, depth_coefficient, dropout_rate=0.2, num_classes=1000):
+    def __init__(self, width_coefficient, depth_coefficient, dropout_rate=0.2, num_classes=None, input_channels=3):
         super(EfficientNet, self).__init__()
 
         def round_filters(filters, width_coefficient):
@@ -95,7 +95,7 @@ class EfficientNet(nn.Module):
         ]
 
         self.out_channels = round_filters(base_channels, width_coefficient)
-        self.stem_conv = nn.Conv2d(3, self.out_channels, kernel_size=3, stride=2, padding=1, bias=False)
+        self.stem_conv = nn.Conv2d(input_channels, self.out_channels, kernel_size=3, stride=2, padding=1, bias=False)
         self.stem_bn = nn.BatchNorm2d(self.out_channels)
         self.swish = Swish()
 
@@ -147,26 +147,26 @@ class EfficientNet(nn.Module):
                 nn.init.normal_(m.weight, 0, 0.01)
                 nn.init.constant_(m.bias, 0)
 
-def EfficientNetB0(num_classes=1000):
-    return EfficientNet(width_coefficient=1.0, depth_coefficient=1.0, dropout_rate=0.2, num_classes=num_classes)
+def EfficientNetB0(input_channels=3, num_classes=None):
+    return EfficientNet(width_coefficient=1.0, depth_coefficient=1.0, dropout_rate=0.2, num_classes=num_classes, input_channels=input_channels)
 
-def EfficientNetB1(num_classes=1000):
-    return EfficientNet(width_coefficient=1.0, depth_coefficient=1.1, dropout_rate=0.2, num_classes=num_classes)
+def EfficientNetB1(input_channels=3, num_classes=None):
+    return EfficientNet(width_coefficient=1.0, depth_coefficient=1.1, dropout_rate=0.2, num_classes=num_classes, input_channels=input_channels)
 
-def EfficientNetB2(num_classes=1000):
-    return EfficientNet(width_coefficient=1.1, depth_coefficient=1.2, dropout_rate=0.3, num_classes=num_classes)
+def EfficientNetB2(input_channels=3, num_classes=None):
+    return EfficientNet(width_coefficient=1.1, depth_coefficient=1.2, dropout_rate=0.3, num_classes=num_classes, input_channels=input_channels)
 
-def EfficientNetB3(num_classes=1000):
-    return EfficientNet(width_coefficient=1.2, depth_coefficient=1.4, dropout_rate=0.3, num_classes=num_classes)
+def EfficientNetB3(input_channels=3, num_classes=None):
+    return EfficientNet(width_coefficient=1.2, depth_coefficient=1.4, dropout_rate=0.3, num_classes=num_classes, input_channels=input_channels)
 
-def EfficientNetB4(num_classes=1000):
-    return EfficientNet(width_coefficient=1.4, depth_coefficient=1.8, dropout_rate=0.4, num_classes=num_classes)
+def EfficientNetB4(input_channels=3, num_classes=None):
+    return EfficientNet(width_coefficient=1.4, depth_coefficient=1.8, dropout_rate=0.4, num_classes=num_classes, input_channels=input_channels)
 
-def EfficientNetB5(num_classes=1000):
-    return EfficientNet(width_coefficient=1.6, depth_coefficient=2.2, dropout_rate=0.4, num_classes=num_classes)
+def EfficientNetB5(input_channels=3, num_classes=None):
+    return EfficientNet(width_coefficient=1.6, depth_coefficient=2.2, dropout_rate=0.4, num_classes=num_classes, input_channels=input_channels)
 
-def EfficientNetB6(num_classes=1000):
-    return EfficientNet(width_coefficient=1.8, depth_coefficient=2.6, dropout_rate=0.5, num_classes=num_classes)
+def EfficientNetB6(input_channels=3, num_classes=None):
+    return EfficientNet(width_coefficient=1.8, depth_coefficient=2.6, dropout_rate=0.5, num_classes=num_classes, input_channels=input_channels)
 
-def EfficientNetB7(num_classes=1000):
-    return EfficientNet(width_coefficient=2.0, depth_coefficient=3.1, dropout_rate=0.5, num_classes=num_classes)
+def EfficientNetB7(input_channels=3, num_classes=None):
+    return EfficientNet(width_coefficient=2.0, depth_coefficient=3.1, dropout_rate=0.5, num_classes=num_classes, input_channels=input_channels)
