@@ -1,9 +1,17 @@
-# resnet_model.py
-
 import torch
 import torch.nn as nn
 import torchvision.models as models
 import logging
+from urllib.request import urlopen
+from torch.hub import load_state_dict_from_url
+
+model_urls = {
+    'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
+    'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
+    'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
+    'resnet101': 'https://download.pytorch.org/models/resnet101-5d3b4d8f.pth',
+    'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
+}
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -113,63 +121,53 @@ class ResNetModel(nn.Module):
         return nn.Sequential(*layers)
 
     def load_pretrained_weights(self, block, layers, num_classes, input_channels):
-        # Check if the torchvision version supports the new weights attribute
-        if hasattr(models, 'ResNet18_Weights'):
-            if block == BasicBlock and layers == [2, 2, 2, 2]:
-                pretrained_model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
-            elif block == BasicBlock and layers == [3, 4, 6, 3]:
-                pretrained_model = models.resnet34(weights=models.ResNet34_Weights.IMAGENET1K_V1)
-            elif block == Bottleneck and layers == [3, 4, 6, 3]:
-                pretrained_model = models.resnet50(weights=models.ResNet50_Weights.IMAGENET1K_V1)
-            elif block == Bottleneck and layers == [3, 4, 23, 3]:
-                pretrained_model = models.resnet101(weights=models.ResNet101_Weights.IMAGENET1K_V1)
-            elif block == Bottleneck and layers == [3, 8, 36, 3]:
-                pretrained_model = models.resnet152(weights=models.ResNet152_Weights.IMAGENET1K_V1)
-            else:
-                raise ValueError("No pretrained model available for the specified architecture.")
+        if block == BasicBlock and layers == [2, 2, 2, 2]:
+            url = model_urls['resnet18']
+        elif block == BasicBlock and layers == [3, 4, 6, 3]:
+            url = model_urls['resnet34']
+        elif block == Bottleneck and layers == [3, 4, 6, 3]:
+            url = model_urls['resnet50']
+        elif block == Bottleneck and layers == [3, 4, 23, 3]:
+            url = model_urls['resnet101']
+        elif block == Bottleneck and layers == [3, 8, 36, 3]:
+            url = model_urls['resnet152']
         else:
-            if block == BasicBlock and layers == [2, 2, 2, 2]:
-                pretrained_model = models.resnet18(pretrained=True)
-            elif block == BasicBlock and layers == [3, 4, 6, 3]:
-                pretrained_model = models.resnet34(pretrained=True)
-            elif block == Bottleneck and layers == [3, 4, 6, 3]:
-                pretrained_model = models.resnet50(pretrained=True)
-            elif block == Bottleneck and layers == [3, 4, 23, 3]:
-                pretrained_model = models.resnet101(pretrained=True)
-            elif block == Bottleneck and layers == [3, 8, 36, 3]:
-                pretrained_model = models.resnet152(pretrained=True)
-            else:
-                raise ValueError("No pretrained model available for the specified architecture.")
+            raise ValueError("No pretrained model available for the specified architecture.")
 
-        # Load pretrained weights, excluding the final layer
+        pretrained_dict = load_state_dict_from_url(url, progress=True)
         model_dict = self.state_dict()
-        pretrained_dict = {k: v for k, v in pretrained_model.state_dict().items() if k in model_dict and 'fc' not in k}
+        pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict and 'fc' not in k}
         model_dict.update(pretrained_dict)
         self.load_state_dict(model_dict)
 
-        # Adjust the first convolutional layer if the input channels are not 3
         if input_channels != 3:
             self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
 
-        # Replace the final layer with a new one that matches the number of classes for your dataset
         self.fc = nn.Linear(512 * self.block_expansion, num_classes)
 
-
+def check_num_classes(func):
+    def wrapper(*args, **kwargs):
+        num_classes = kwargs.get('num_classes')
+        if num_classes is None:
+            raise ValueError("num_classes must be specified")
+        return func(*args, **kwargs)
+    return wrapper
+@check_num_classes
 def ResNet18(pretrained=False, input_channels=3, num_classes=None):
     return ResNetModel(BasicBlock, [2, 2, 2, 2], num_classes=num_classes, pretrained=pretrained, input_channels=input_channels)
 
-
+@check_num_classes
 def ResNet34(pretrained=False, input_channels=3, num_classes=None):
     return ResNetModel(BasicBlock, [3, 4, 6, 3], num_classes=num_classes, pretrained=pretrained, input_channels=input_channels)
 
-
+@check_num_classes
 def ResNet50(pretrained=False, input_channels=3, num_classes=None):
     return ResNetModel(Bottleneck, [3, 4, 6, 3], num_classes=num_classes, pretrained=pretrained, input_channels=input_channels)
 
-
+@check_num_classes
 def ResNet101(pretrained=False, input_channels=3, num_classes=None):
     return ResNetModel(Bottleneck, [3, 4, 23, 3], num_classes=num_classes, pretrained=pretrained, input_channels=input_channels)
 
-
+@check_num_classes
 def ResNet152(pretrained=False, input_channels=3, num_classes=None):
     return ResNetModel(Bottleneck, [3, 8, 36, 3], num_classes=num_classes, pretrained=pretrained, input_channels=input_channels)

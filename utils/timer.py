@@ -24,7 +24,9 @@ class Timer:
         hour_str = f"{h} {'hr' if h == 1 else 'hrs'}"
         min_str = f"{m} {'min' if m == 1 else 'mins'}"
         sec_str = f"{s} {'sec' if s == 1 else 'secs'}"
-        duration_str = f"{hour_str}, {min_str}, {sec_str}"
+        # duration_str = f"{hour_str}, {min_str}, {sec_str}"
+        duration_str = f"{min_str}, {sec_str}"
+
         return duration_str
 
     @staticmethod

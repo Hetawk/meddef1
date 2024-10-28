@@ -15,6 +15,7 @@ class OptimizerLoader:
 
     def get_optimizer(self, optimizer_name, model_params, **kwargs):
         if optimizer_name in self.optimizers_dict:
+            print("\n")
             logging.info(f"Loading optimizer: {optimizer_name} with params: {kwargs}")
             if optimizer_name == 'adam':
                 # Use 'momentum' value for the first beta coefficient if it's specified

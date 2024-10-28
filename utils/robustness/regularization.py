@@ -21,8 +21,12 @@ class Regularization:
 
         Returns:
             torch.Tensor: The L2 regularization term to be added to the loss.
+            :param model:
+            :param lambda_l2:
+            :param log_message:
         """
         if log_message:
+            print("\n")
             logging.info(f"Applying L2 regularization with strength: {lambda_l2}")
         l2_reg = torch.tensor(0., device=next(model.parameters()).device)
         for param in model.parameters():

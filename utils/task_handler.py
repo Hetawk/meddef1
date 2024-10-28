@@ -10,9 +10,10 @@ from utils.robustness.cross_validation import CrossValidator
 from utils.visual.normal_visual import visualize_all
 from utils.visual.visualization import Visualization
 
+
 class TaskHandler:
     def __init__(self, datasets_dict, models_loader, optimizers_dict, hyperparams_dict, input_channels_dict, classes,
-                 dataset_name, lr_scheduler_loader=None, cross_validator=None, device=None, preprocessor=None):
+                 dataset_name, lr_scheduler_loader, cross_validator, device, args):
         self.classes = classes  # Ensure this is a dictionary
         self.dataset_name = dataset_name
         self.datasets_dict = datasets_dict
@@ -27,8 +28,8 @@ class TaskHandler:
         self.attack_loader = None
         self.defense_loader = None
         self.criterion = torch.nn.CrossEntropyLoss()
-        self.device = device
-        self.preprocessor = preprocessor
+        self.args = args
+        self.device = args.device
         self.trained_models = {}
 
     def run_train(self):
@@ -258,24 +259,31 @@ class TaskHandler:
             adv_examples_dict[attack_name] = (adv_examples_list, adv_labels_list)
         return adv_examples_dict
 
+    # utils/task_handler.py
+
+    # utils/task_handler.py
+
     def train_and_evaluate_model(self, model_name, dataset_name, train_loader, val_loader, test_loader, input_channels,
                                  adversarial=False):
         """Trains and evaluates a model using DataLoader instances."""
-        if self.preprocessor is None:
-            raise ValueError("Preprocessor is not set.")
 
         # Pass num_classes correctly
         class_names = self.classes.get(dataset_name, [])
         num_classes = len(class_names)
+        if num_classes <= 2:
+            raise ValueError(f"Number of classes for dataset {dataset_name} is {num_classes}, which seems incorrect.")
         model = self.models_loader.get_model(model_name, input_channels=input_channels, num_classes=num_classes)
         model.to(self.device)
+
+        # Calculate and print the total number of parameters in the model
+        total_params = sum(p.numel() for p in model.parameters()) / 1000000.0
+        logging.info(f'Total parameters for {model_name}: {total_params:.2f}M')
 
         hyperparams = self.hyperparams_dict[dataset_name]
         optimizer = self.optimizers_dict.get_optimizer(
             hyperparams['optimizer'], model.parameters(),
             lr=hyperparams['lr'],
-            momentum=hyperparams.get('momentum', 0),
-            # weight_decay=hyperparams.get('weight_decay', 0)
+            momentum=hyperparams.get('momentum', 0)
         )
 
         if self.current_task in ['defense', 'attack']:
@@ -284,39 +292,31 @@ class TaskHandler:
         if self.current_task is None or dataset_name is None:
             raise ValueError("Task name or dataset name is not set.")
 
-        # # Initialize scheduler and cross-validator if available
-        # scheduler = self.lr_scheduler_loader.get_scheduler(
-        #     'ReduceLROnPlateau',
-        #     optimizer,
-        #     patience=hyperparams['patience']) if self.lr_scheduler_loader else None
-        # cross_validator = CrossValidator(train_loader.dataset, model, self.criterion, optimizer, hyperparams,
-        #                                  num_folds=5) if self.cross_validator else None
-
         trainer = Trainer(
-            model,
-            train_loader,
-            val_loader,
-            test_loader,
-            optimizer,
-            self.criterion,
-            model_name,
-            self.current_task,
-            dataset_name,
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            test_loader=test_loader,
+            optimizer=optimizer,
+            criterion=self.criterion,
+            model_name=model_name,
+            task_name=self.current_task,
+            dataset_name=dataset_name,
             device=self.device,
-            lambda_l2=hyperparams['lambda_l2'],
-            dropout_rate=hyperparams['dropout_rate'],
-            alpha=hyperparams.get('alpha', 0.01),
+            args=self.args,  # Pass args here
             attack_loader=self.attack_loader,
-            # scheduler=scheduler,
-            # cross_validator=cross_validator
+            scheduler=self.lr_scheduler_loader.get_scheduler(
+                hyperparams['scheduler'], optimizer, **hyperparams['scheduler_params']
+            ) if self.lr_scheduler_loader else None,
+            cross_validator=self.cross_validator
         )
 
         if adversarial:
             # Use adversarial training
-            trainer.train(epochs=hyperparams['epochs'], patience=hyperparams['patience'])
+            trainer.train(patience=hyperparams['patience'], adversarial=True)
         else:
             # Use normal training
-            trainer.train(epochs=hyperparams['epochs'], patience=hyperparams['patience'])
+            trainer.train(patience=hyperparams['patience'])
 
         trainer.test()
         model.trained = True

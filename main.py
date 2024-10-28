@@ -1,15 +1,16 @@
 # main.py
+import argparse
 import json
 import logging
+import os
+import random
 import sys
 
 import torch
 import torchvision
 from torch import nn
 
-# from arg_parser import ArgParser
 from loader.dataset_loader import DatasetLoader
-from loader.preprocess import Preprocessor
 from model.model_loader import ModelLoader
 from train import Trainer
 from utils.logger import setup_logger
@@ -18,6 +19,7 @@ from utils.task_handler import TaskHandler
 from utils.robustness.lr_scheduler import LRSchedulerLoader
 from utils.robustness.cross_validation import CrossValidator  # Import CrossValidator
 from utils.evaluator import Evaluator
+from arg_parser import get_args
 
 print("Torch version: ", torch.__version__)
 print("Torchvision version: ", torchvision.__version__)
@@ -35,93 +37,91 @@ setup_logger('out/logger.txt')
 logging.info("Main script started.")
 
 # Parse arguments
-# arg_parser = ArgParser()
-# args = arg_parser.get_args()
-# logging.info(f"Parsed arguments: {args}")
+args = get_args()
+state = {k: v for k, v in args._get_kwargs()}
+
+# Random seed
+if args.manualSeed is None:
+    args.manualSeed = random.randint(1, 10000)
+random.seed(args.manualSeed)
+torch.manual_seed(args.manualSeed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(args.manualSeed)
 
 # Use the get_all_datasets static method from the DatasetLoader class to get the dictionary of all datasets
 datasets_dict = DatasetLoader.get_all_datasets()
 
-# device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-# Determine device based on GPU availability -> linux server
-device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
-# Determine device based on GPU availability -> using local computer with gpu
-# device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  # Determine device based on GPU availability
-
-models_dict = ModelLoader(device)  # Pass device argument when creating ModelLoader instance
+models_dict = ModelLoader(args.device)  # Pass device argument when creating ModelLoader instance
 optimizers_dict = OptimizerLoader()
 lr_scheduler_loader = LRSchedulerLoader()  # Initialize LRSchedulerLoader
 
 # Define a single set of hyperparameters to be used for all datasets
 hyperparams = {
-    'epochs': 30,
-    # 'epochs': args.epochs,
-    'lr': 0.01,
-    # 'lr': args.lr,
-    'momentum': 0.9,
-    'patience': 5,
-    'lambda_l2': 0.01,
-    'dropout_rate': 0.5,
+    'epochs': args.epochs,
+    'lr': args.lr,
+    'momentum': args.momentum,
+    'patience': args.patience,
+    'lambda_l2': args.lambda_l2,
+    'dropout_rate': args.drop,
     'optimizer': 'adam',
-    'batch_size': 32,
-    # 'batch_size': args.batch_size,
+    'batch_size': args.train_batch,
     'scheduler': 'StepLR',  # Add scheduler name
-    'scheduler_params': {'step_size': 10, 'gamma': 0.1}  # Add scheduler parameters
+    'scheduler_params': {'step_size': 10, 'gamma': args.gamma}  # Add scheduler parameters
 }
-
-task_to_run = (  # Uncomment the task that you wish to run
-    'normal_training'
-    # 'attack'
-    # 'defense'
-)
 
 # record to be used for tuning
 results = []
 
 # Iterate over each dataset in datasets_dict
 for dataset_name, dataset_loader in datasets_dict.items():
-    input_channels = dataset_loader.get_input_channels()
+    dataset_loader.pin_memory = args.pin_memory  # Set pin_memory for each dataset_loader
+    input_channels = dataset_loader.get_input_channels(
+        train_batch_size=args.train_batch,
+        val_batch_size=args.test_batch,
+        test_batch_size=args.test_batch,
+        num_workers=args.workers,
+        pin_memory=args.pin_memory
+    )
 
     # Load datasets
-    datasets = dataset_loader.load()
-    train_dataset, val_dataset, test_dataset = datasets[:3] if len(datasets) > 2 else (datasets[0], None, None)
+    train_loader, val_loader, test_loader = dataset_loader.load(
+        train_batch_size=args.train_batch,
+        val_batch_size=args.test_batch,
+        test_batch_size=args.test_batch,
+        num_workers=args.workers,
+        pin_memory=args.pin_memory
+    )
+
+    # Extract train_dataset from train_loader
+    train_dataset = train_loader.dataset
+    # Check if train_dataset is a Subset and get the original dataset
+    if isinstance(train_dataset, torch.utils.data.Subset):
+        original_dataset = train_dataset.dataset
+    else:
+        original_dataset = train_dataset
+    # Get the classes from the original dataset
+    classes = original_dataset.classes
+    num_classes = len(classes)
 
     # Iterate over each model in models_dict
-    for model_name in models_dict.models_dict.keys():
-        # Initialize Preprocessor
-        preprocessor = Preprocessor(
-            model_type=model_name,
-            dataset_name=dataset_name,
-            task_name=task_to_run,
-            data_dir='./dataset',
-            hyperparams=hyperparams
-        )
-
-        # Preprocess datasets once
-        train_dataset, val_dataset, test_dataset = preprocessor.preprocess(
-            train_dataset, val_dataset, test_dataset, input_channels
-        )
-
-        classes = preprocessor.extract_classes(train_dataset)
-        num_classes = len(classes)
-
-        # After preprocessing the datasets
-        train_loader, val_loader, test_loader = preprocessor.wrap_datasets_in_dataloaders(
-            train_dataset, val_dataset, test_dataset, shuffle=True
-        )
-
+    for model_name, model_class in models_dict.models_dict.items():
         # Initialize CrossValidator
         cross_validator = CrossValidator(
-            dataset=train_dataset,
+            dataset=train_loader.dataset,
             model=models_dict.models_dict[model_name],
+            model_name=model_name,  # Pass the actual model name
+            dataset_name=dataset_name,  # Pass the actual dataset name
             criterion=nn.CrossEntropyLoss(),
-            optimizer=optimizers_dict.get_optimizer(
-                hyperparams['optimizer'],
-                model_params=models_dict.models_dict[model_name](num_classes=num_classes).parameters(),
-                lr=hyperparams['lr'],
-                momentum=hyperparams['momentum']
-            ),
-            hyperparams=hyperparams
+            optimizer_class=optimizers_dict.optimizers_dict[hyperparams['optimizer']],  # Pass the optimizer class
+            optimizer_params={'lr': hyperparams['lr'], 'momentum': hyperparams['momentum']},
+            # Pass the optimizer parameters
+            hyperparams=hyperparams,
+            num_classes=num_classes,
+            device=args.device,
+            args=args,
+            attack_loader=None,
+            scheduler=None,
+            cross_validator=None
         )
 
         # Initialize TaskHandler with preprocessed datasets
@@ -135,69 +135,15 @@ for dataset_name, dataset_loader in datasets_dict.items():
             dataset_name=dataset_name,
             lr_scheduler_loader=lr_scheduler_loader,  # Pass lr_scheduler_loader
             cross_validator=cross_validator,  # Pass cross_validator
-            device=device,
-            preprocessor=preprocessor
+            device=args.device,
+            args=args
         )
 
-        if task_to_run == 'normal_training':
+        if args.task_name == 'normal_training':
             task_handler.run_train()
-        elif task_to_run == 'attack':
+        elif args.task_name == 'attack':
             task_handler.run_attack()
-        elif task_to_run == 'defense':
+        elif args.task_name == 'defense':
             task_handler.run_defense()
         else:
-            logging.error(f"Unknown task: {task_to_run}. No task was executed.")
-#             continue
-#
-#         trainer = Trainer(
-#             model=models_dict.get_model(model_name, input_channels=input_channels, num_classes=num_classes),
-#             train_loader=train_loader,
-#             val_loader=val_loader,
-#             test_loader=test_loader,
-#             optimizer='adam',
-#             criterion=nn.CrossEntropyLoss(),
-#             model_name=model_name,
-#             task_name=task_to_run,
-#             dataset_name=dataset_name,
-#             device=device,
-#             lambda_l2=0.0,
-#             dropout_rate=0.5,
-#             alpha=0.01,
-#             attack_loader=None,
-#             scheduler=None,
-#             cross_validator=None,
-#             adversarial=False
-#         )
-#
-#         # Retrieve test results
-#         true_labels, all_predictions = trainer.get_test_results()
-#         task_name = task_to_run
-#         all_probabilities = []  # Assuming you have a way to get probabilities if needed
-#
-#         evaluator = Evaluator(model_name, results, true_labels.tolist(), all_predictions.tolist(), task_name,
-#                               all_probabilities)
-#         metrics = evaluator.evaluate(dataset_name)
-#
-#         # Filter the desired metrics
-#         filtered_metrics = {
-#             'Accuracy': metrics['accuracy'],
-#             'Precision': metrics['precision'],
-#             'Recall': metrics['recall'],
-#             'F1 Score': metrics['f1']
-#         }
-#
-#         # Record results
-#         result = {
-#             'dataset': dataset_name,
-#             'model': model_name,
-#             'task': task_to_run,
-#             'hyperparameters': hyperparams,
-#             'transformations': preprocessor.get_transforms(input_channels, dataset_name),
-#             'performance': filtered_metrics
-#         }
-#         results.append(result)
-# # Save results to a JSON file
-# with open('tuning.json', 'w') as f:
-#     json.dump(results, f, indent=4)
-#
-# logging.info("Script finished.")
+            logging.error(f"Unknown task: {args.task_name}. No task was executed.")

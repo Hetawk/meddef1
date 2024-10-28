@@ -1,99 +1,65 @@
-# import argparse
-# import logging
-# import os
-# from loader.dataset_loader import DatasetLoader
-# from loader.preprocess import Preprocessor
-# from model.model_loader import ModelLoader
-#
-# class ArgParser:
-#     def __init__(self):
-#         self.parser = argparse.ArgumentParser(description='PyTorch Machine Learning Script')
-#         self._add_arguments()
-#         self.args = self.parser.parse_args()
-#         self._validate_args()
-#         self.dataset_loader = DatasetLoader(self.args.dataset_name, self.args.data_dir)
-#         self.preprocessor = Preprocessor(model_type=self.args.model_type, dataset_name=self.args.dataset_name,
-#                                          task_name=self.args.task, data_dir=self.args.data_dir,
-#                                          hyperparams={'batch_size': self.args.batch_size})
-#         self.model_loader = ModelLoader(self.args.device)
-#
-#     def _add_arguments(self):
-#         self.parser.add_argument('--epochs', type=int, default=10, help='Number of epochs to train')
-#         self.parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
-#         self.parser.add_argument('--batch_size', type=int, default=64, help='Batch size for training')
-#         self.parser.add_argument('--data_dir', type=str, default='./dataset', help='Directory for dataset')
-#         self.parser.add_argument('--dataset_name', type=str, default='ccts', help='Name of the dataset to load')
-#         self.parser.add_argument('--device', type=str, default='cuda:1', help='Device to use for training')
-#         self.parser.add_argument('--model_type', type=str, default='resnet50', help='Type of model to use')
-#         self.parser.add_argument('--num_classes', type=int, help='Number of output classes')
-#         self.parser.add_argument('--task', type=str, default='normal_training', choices=['normal_training', 'attack', 'defense'], help='Task to run')
-#
-#     def _validate_args(self):
-#         if self.args.epochs <= 0:
-#             raise ValueError("Number of epochs must be positive")
-#         if self.args.lr <= 0:
-#             raise ValueError("Learning rate must be positive")
-#         if self.args.batch_size <= 0:
-#             raise ValueError("Batch size must be positive")
-#         if not os.path.isdir(self.args.data_dir):
-#             raise ValueError(f"Data directory {self.args.data_dir} does not exist")
-#
-#     def get_args(self):
-#         return self.args
-#
-# if __name__ == "__main__":
-#     logging.basicConfig(level=logging.INFO)
-#     arg_parser = ArgParser()
-#     args = arg_parser.get_args()
-#     logging.info(f"Parsed arguments: {args}")
-#
-#     # Load datasets
-#     train_dataset, val_dataset, test_dataset = arg_parser.dataset_loader.load()
-#     logging.info(f"Loaded datasets: train={len(train_dataset)}, val={len(val_dataset)}, test={len(test_dataset)}")
-#
-#     # Preprocess datasets
-#     train_dataset, val_dataset, test_dataset = arg_parser.preprocessor.preprocess(train_dataset, val_dataset, test_dataset, arg_parser.dataset_loader.get_input_channels())
-#
-#     # Log the size and shape of the preprocessed data
-#     logging.info(f"Preprocessed train dataset size: {len(train_dataset)}")
-#     logging.info(f"Preprocessed train dataset sample shape: {train_dataset[0][0].shape}")
-#     if val_dataset:
-#         logging.info(f"Preprocessed val dataset size: {len(val_dataset)}")
-#         logging.info(f"Preprocessed val dataset sample shape: {val_dataset[0][0].shape}")
-#     if test_dataset:
-#         logging.info(f"Preprocessed test dataset size: {len(test_dataset)}")
-#         logging.info(f"Preprocessed test dataset sample shape: {test_dataset[0][0].shape}")
-#
-#     # Wrap datasets in dataloaders
-#     train_loader, val_loader, test_loader = arg_parser.preprocessor.wrap_datasets_in_dataloaders(train_dataset, val_dataset, test_dataset)
-#     logging.info(f"Wrapped datasets in dataloaders: train_loader={len(train_loader)}, val_loader={len(val_loader) if val_loader else 0}, test_loader={len(test_loader) if test_loader else 0}")
-#
-#     # Visualize samples
-#     arg_parser.preprocessor.visualize_samples('default_model', train_dataset)
-#
-#     # Print class counts
-#     arg_parser.dataset_loader.print_class_counts()
-#
-#     # Get number of classes dynamically if not provided
-#     if args.num_classes is None:
-#         classes = arg_parser.preprocessor.extract_classes(train_dataset)
-#         num_classes = len(classes)
-#     else:
-#         num_classes = args.num_classes
-#
-#     # Get model
-#     model = arg_parser.model_loader.get_model(args.model_type, input_channels=arg_parser.dataset_loader.get_input_channels(), num_classes=num_classes)
-#     logging.info(f"Model {args.model_type} loaded with {arg_parser.dataset_loader.get_input_channels()} input channels and {num_classes} output classes.")
-#
-#     # Run task
-#     if args.task == 'normal_training':
-#         logging.info("Running normal training task.")
-#         # Implement normal training task
-#     elif args.task == 'attack':
-#         logging.info("Running attack task.")
-#         # Implement attack task
-#     elif args.task == 'defense':
-#         logging.info("Running defense task.")
-#         # Implement defense task
-#     else:
-#         logging.error(f"Unknown task: {args.task}. No task was executed.")
+# arg_parser.py
+import argparse
+import os
+
+import torch
+
+
+def get_args():
+    parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
+
+    # Datasets
+    parser.add_argument('-d', '--data', default='scisic', type=str)
+    parser.add_argument('-j', '--workers', default=8, type=int, metavar='N',
+                        help='number of data loading workers (default: 4)')
+    parser.add_argument('--use_cross_validator', action='store_true', help='Use cross validation')
+    # Optimization options
+    parser.add_argument('--epochs', default=30, type=int, metavar='N', help='number of total epochs to run')
+    parser.add_argument('--start-epoch', default=0, type=int, metavar='N', help='manual epoch number (useful on restarts)')
+    parser.add_argument('--train-batch', default=64, type=int, metavar='N', help='train batchsize (default: 256)')
+    parser.add_argument('--test-batch', default=32, type=int, metavar='N', help='test batchsize (default: 200)')
+    parser.add_argument('--lr', '--learning-rate', default=0.01, type=float, metavar='LR', help='initial learning rate')
+    parser.add_argument('--drop', '--dropout', default=0, type=float, metavar='Dropout', help='Dropout ratio')
+    parser.add_argument('--schedule', type=int, nargs='+', default=[150, 225],
+                        help='Decrease learning rate at these epochs.')
+    parser.add_argument('--gamma', type=float, default=0.1, help='LR is multiplied by gamma on schedule.')
+    parser.add_argument('--momentum', default=0.9, type=float, metavar='M', help='momentum')
+    parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float, metavar='W',
+                        help='weight decay (default: 1e-4)')
+    parser.add_argument('--patience', default=5, type=int, metavar='N', help='patience for early stopping')
+    parser.add_argument('--lambda_l2', default=0.01, type=float, metavar='L2', help='L2 regularization lambda')
+    parser.add_argument('--alpha', default=0.01, type=float, metavar='Alpha', help='Alpha value for adversarial '
+                                                                                   'training')
+    # Checkpoints
+    parser.add_argument('-c', '--checkpoint', default='checkpoint', type=str, metavar='PATH',
+                        help='path to save checkpoint (default: checkpoint)')
+    parser.add_argument('--resume', default='', type=str, metavar='PATH', help='path to latest checkpoint (default: none)')
+    # Architecture
+    parser.add_argument('--arch', '-a', metavar='ARCH', default='')
+    parser.add_argument('--depth', type=int, default=18, help='Model depth.')
+    parser.add_argument('--cardinality', type=int, default=32, help='Meddef cardinality (group).')
+    parser.add_argument('--base-width', type=int, default=4, help='Meddef base width.')
+    parser.add_argument('--widen-factor', type=int, default=4, help='Widen factor. 4 -> 64, 8 -> 128, ...')
+    # Miscs
+    parser.add_argument('--manualSeed', type=int, help='manual seed')
+    parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
+                        help='evaluate model on validation set')
+    parser.add_argument('--pretrained', dest='pretrained', default=True, action='store_true',
+                        help='use pre-trained model')
+    parser.add_argument('--pin-memory', action='store_true', help='Use pinned memory for data loading')
+    # Device options
+    parser.add_argument('--gpu-ids', default='3,2,1', type=str,
+                        help='id(s) for CUDA_VISIBLE_DEVICES')
+    # Task to run
+    parser.add_argument('--task_name', type=str, choices=['normal_training', 'attack', 'defense'],
+                        default='normal_training',
+                        help='Task to run: normal_training, attack, or defense')
+
+    args = parser.parse_args()
+
+    # Use CUDA
+    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_ids
+    use_cuda = torch.cuda.is_available()
+    args.device = torch.device("cuda:3" if use_cuda else "cpu")
+
+    return args

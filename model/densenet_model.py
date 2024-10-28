@@ -1,8 +1,14 @@
 import torch
 import torch.nn as nn
 import logging
-import torchvision.models as models
+from torch.hub import load_state_dict_from_url
 
+model_urls = {
+    'densenet121': 'https://download.pytorch.org/models/densenet121-a639ec97.pth',
+    'densenet169': 'https://download.pytorch.org/models/densenet169-b2777c0a.pth',
+    'densenet201': 'https://download.pytorch.org/models/densenet201-c1103571.pth',
+    'densenet161': 'https://download.pytorch.org/models/densenet161-8d451a50.pth',
+}
 
 class DenseBlock(nn.Module):
     def __init__(self, in_channels, growth_rate, num_layers):
@@ -26,7 +32,6 @@ class DenseBlock(nn.Module):
         output = torch.cat(features, 1)
         return output
 
-
 class TransitionLayer(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(TransitionLayer, self).__init__()
@@ -41,11 +46,10 @@ class TransitionLayer(nn.Module):
         output = self.transition(x)
         return output
 
-
 class DenseNetModel(nn.Module):
     logged = False
 
-    def __init__(self, num_blocks, num_classes, input_channels=3, growth_rate=12, reduction=0.5, pretrained=False):
+    def __init__(self, num_blocks, num_classes, input_channels=3, growth_rate=12, reduction=0.5, pretrained=False, model_name=None):
         super(DenseNetModel, self).__init__()
         self.growth_rate = growth_rate
 
@@ -73,7 +77,7 @@ class DenseNetModel(nn.Module):
         self.fc = nn.Linear(num_features, num_classes)
 
         if pretrained:
-            self.load_pretrained_weights(input_channels, num_classes)
+            self.load_pretrained_weights(input_channels, num_classes, model_name)
 
     def forward(self, x):
         if not self.logged and torch.cuda.current_device() == 0:  # Only log for the first GPU to reduce clutter
@@ -96,47 +100,31 @@ class DenseNetModel(nn.Module):
         x = self.fc(x)
         return x
 
-    def load_pretrained_weights(self, input_channels, num_classes):
-        # Load pretrained weights from torchvision models
-        pretrained_model = models.densenet121(pretrained=True)
+    def load_pretrained_weights(self, input_channels, num_classes, model_name):
+        if model_name not in model_urls:
+            raise ValueError(f"No pretrained model available for {model_name}")
 
-        if input_channels == 3:
-            self.conv1.load_state_dict(pretrained_model.features.conv0.state_dict())
-        else:
-            # For non-standard input channels, initialize the weights of the first conv layer
+        # Load pretrained weights from the URL
+        pretrained_dict = load_state_dict_from_url(model_urls[model_name], progress=True)
+        model_dict = self.state_dict()
+        pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict and 'fc' not in k}
+        model_dict.update(pretrained_dict)
+        self.load_state_dict(model_dict)
+
+        if input_channels != 3:
+            self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
             nn.init.kaiming_normal_(self.conv1.weight, mode='fan_out', nonlinearity='relu')
-        self.bn1.load_state_dict(pretrained_model.features.norm0.state_dict())
 
-        for i, block in enumerate(self.dense_blocks):
-            block_layers = pretrained_model.features.__getattr__(f'denseblock{i + 1}')
-            for j, layer in enumerate(block.layers):
-                layer.load_state_dict(block_layers.__getattr__(f'denselayer{j + 1}').state_dict())
-
-        for i, transition in enumerate(self.transition_layers):
-            transition.load_state_dict(pretrained_model.features.__getattr__(f'transition{i + 1}').state_dict())
-
-        self.bn_final.load_state_dict(pretrained_model.features.norm5.state_dict())
-
-        self.fc = nn.Linear(pretrained_model.classifier.in_features, num_classes)
-        if self.fc.weight.shape[0] == pretrained_model.classifier.weight.shape[0]:
-            self.fc.load_state_dict(pretrained_model.classifier.state_dict())
-
+        self.fc = nn.Linear(self.fc.in_features, num_classes)
 
 def DenseNet121(pretrained=False, input_channels=3, num_classes=None):
-    return DenseNetModel([6, 12, 24, 16], growth_rate=32, num_classes=num_classes, input_channels=input_channels,
-                         pretrained=pretrained)
-
+    return DenseNetModel([6, 12, 24, 16], growth_rate=32, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained, model_name='densenet121')
 
 def DenseNet169(pretrained=False, input_channels=3, num_classes=None):
-    return DenseNetModel([6, 12, 32, 32], growth_rate=32, num_classes=num_classes, input_channels=input_channels,
-                         pretrained=pretrained)
-
+    return DenseNetModel([6, 12, 32, 32], growth_rate=32, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained, model_name='densenet169')
 
 def DenseNet201(pretrained=False, input_channels=3, num_classes=None):
-    return DenseNetModel([6, 12, 48, 32], growth_rate=32, num_classes=num_classes, input_channels=input_channels,
-                         pretrained=pretrained)
-
+    return DenseNetModel([6, 12, 48, 32], growth_rate=32, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained, model_name='densenet201')
 
 def DenseNet264(pretrained=False, input_channels=3, num_classes=None):
-    return DenseNetModel([6, 12, 64, 48], growth_rate=32, num_classes=num_classes, input_channels=input_channels,
-                         pretrained=pretrained)
+    return DenseNetModel([6, 12, 64, 48], growth_rate=32, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained, model_name='densenet161')

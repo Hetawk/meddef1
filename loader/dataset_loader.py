@@ -6,13 +6,13 @@ import logging
 import numpy
 import numpy as np
 import pandas as pd
+import torch
 from PIL import Image
-from torch.utils.data import Dataset
 from torchvision import datasets, transforms
 from torchvision.datasets import ImageFolder
 import nibabel as nib
 from typing import Tuple, Optional, Union, cast
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader, random_split, WeightedRandomSampler
 from collections.abc import Sized
 
 
@@ -25,6 +25,7 @@ class DatasetLoader:
     and MICCAI BraTS2020. It also supports custom datasets with the option of
     splitting into training, validation, and test sets.
         """
+    pin_memory = True
 
     def __init__(self, dataset_name, data_dir='./dataset'):
         """
@@ -43,9 +44,9 @@ class DatasetLoader:
             # 'mnist': self.load_mnist,
             # 'med': self.load_med,
             # 'miccai_brats2020': self.load_miccai_brats2020,
-            # 'ccts': self.load_ccts,
+            'ccts': self.load_ccts,
             # 'tbcr': self.load_tbcr,
-            # 'scisic': self.load_scisic,
+            'scisic': self.load_scisic,
             'rotc': self.load_rotc,
 
             # Add more datasets here...
@@ -69,15 +70,22 @@ class DatasetLoader:
             # 'mnist': DatasetLoader('mnist', data_dir),
             # 'med': DatasetLoader('med', data_dir),
             # 'miccai_brats2020': DatasetLoader('miccai_brats2020', data_dir),
-            # 'ccts': DatasetLoader('ccts', data_dir),
+            'ccts': DatasetLoader('ccts', data_dir),
             # 'tbcr': DatasetLoader('tbcr', data_dir),
-            # 'scisic': DatasetLoader('scisic', data_dir),
+            'scisic': DatasetLoader('scisic', data_dir),
             'rotc': DatasetLoader('rotc', data_dir),
         }
 
-    def load(self):
+    def load(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
         """
         Loads the dataset specified by `dataset_name` and returns the training, validation, and test DataLoaders.
+
+        Args:
+            train_batch_size (int): Batch size for the training DataLoader.
+            val_batch_size (int): Batch size for the validation DataLoader.
+            test_batch_size (int): Batch size for the test DataLoader.
+            num_workers (int): Number of worker processes for data loading.
+            pin_memory (bool): Whether to use pinned memory for data loading.
 
         Returns:
             tuple: A tuple containing:
@@ -90,146 +98,183 @@ class DatasetLoader:
         """
         logging.info(f"Loading dataset: {self.dataset_name}.")
         try:
-            train_loader, val_loader, test_loader, _ = self.datasets_dict[self.dataset_name]()
-            return train_loader, val_loader, test_loader
+            return self.datasets_dict[self.dataset_name](train_batch_size, val_batch_size, test_batch_size, num_workers,
+                                                         pin_memory)
         except KeyError:
             raise ValueError(f"Dataset {self.dataset_name} not recognized.")
 
-    # Dataset #1: MNIST
-    def load_mnist(self):
-        """
-        Loads the MNIST dataset and returns DataLoaders for the training, validation, and test datasets.
-
-        Returns:
-            tuple: A tuple containing:
-                - train_loader (torch.utils.data.DataLoader): The DataLoader for the training dataset.
-                - val_loader (torch.utils.data.DataLoader): The DataLoader for the validation dataset.
-                - test_loader (torch.utils.data.DataLoader): The DataLoader for the test dataset.
-                - classes (list): List of class labels.
-        """
-        mnist_train = datasets.MNIST(os.path.join(self.data_dir, 'mnist'), train=True, download=True)
-        mnist_test = datasets.MNIST(os.path.join(self.data_dir, 'mnist'), train=False, download=True)
-        train_dataset, val_dataset, _ = self.split_dataset(mnist_train)
-
-        return train_dataset, val_dataset, mnist_test, mnist_train.classes
+    # # Dataset #1: MNIST
+    # def load_mnist(self):
+    #     """
+    #     Loads the MNIST dataset and returns DataLoaders for the training, validation, and test datasets.
+    #
+    #     """
+    #     mnist_train = datasets.MNIST(os.path.join(self.data_dir, 'mnist'), train=True, download=True)
+    #     mnist_test = datasets.MNIST(os.path.join(self.data_dir, 'mnist'), train=False, download=True)
+    #     train_dataset, val_dataset, _ = self.split_dataset(mnist_train)
+    #
+    #     return train_dataset, val_dataset, mnist_test, mnist_train.classes
 
     # Dataset #3: scisic
-    def load_scisic(self):
-        """
-        Loads the SCISIC dataset and returns DataLoaders for the training, validation, and test datasets.
+    def load_scisic(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        data_transforms = {
+            'train': transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.CenterCrop(256),
+                transforms.RandomCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+            'val': transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.CenterCrop(256),
+                transforms.RandomCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+            'test': transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+        }
 
-
-        Returns:
-            tuple: A tuple containing:
-                - train_loader (torch.utils.data.DataLoader): The DataLoader for the training dataset.
-                - val_loader (torch.utils.data.DataLoader): The DataLoader for the validation dataset.
-                - test_loader (torch.utils.data.DataLoader): The DataLoader for the test dataset.
-                - classes (list): List of class labels.
-        """
-        transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor()
-        ])
         train_dir = os.path.join(self.data_dir, 'scisic', 'Train')
         test_dir = os.path.join(self.data_dir, 'scisic', 'Test')
-        # Load the full dataset for classes information
-        full_dataset = ImageFolder(train_dir, transform=transform)
-        classes = full_dataset.classes  # Get classes from the full dataset
-        # Load train dataset and split into train and validation
-        train_dataset = ImageFolder(train_dir, transform=transform)
-        train_dataset, val_dataset, _ = self.split_dataset(train_dataset)
-        # Load test dataset separately
-        test_dataset = ImageFolder(test_dir, transform=transform)
 
-        return train_dataset, val_dataset, test_dataset, classes
+        full_dataset = ImageFolder(train_dir, data_transforms['train'])
+        train_dataset, val_dataset, _ = self.split_dataset(full_dataset)
+        test_dataset = ImageFolder(test_dir, data_transforms['test'])
 
-    # Dataset #4: tbcr
-    def load_tbcr(self):
-        """
-       Loads the TBCR dataset and returns DataLoaders for the training, validation, and test datasets.
+        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, full_dataset)
+        train_loader = torch.utils.data.DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
+                                                   num_workers=num_workers, pin_memory=pin_memory)
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers,
+                                                 pin_memory=pin_memory)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=test_batch_size, num_workers=num_workers,
+                                                  pin_memory=pin_memory)
+
+        return train_loader, val_loader, test_loader
 
 
-        Returns:
-            tuple: A tuple containing:
-                - train_loader (torch.utils.data.DataLoader): The DataLoader for the training dataset.
-                - val_loader (torch.utils.data.DataLoader): The DataLoader for the validation dataset.
-                - test_loader (torch.utils.data.DataLoader): The DataLoader for the test dataset.
-                - classes (list): List of class labels.
-        """
-        transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor()
-        ])
-        train_dir = os.path.join(self.data_dir, 'tbcr')
-        full_dataset = ImageFolder(train_dir, transform=transform)
-        train_dataset, val_dataset, test_dataset = self.split_dataset(full_dataset)
-
-        return train_dataset, test_dataset, val_dataset, full_dataset.classes
+    # # Dataset #4: tbcr
+    # def load_tbcr(self):
+    #     """
+    #    Loads the TBCR dataset and returns DataLoaders for the training, validation, and test datasets.
+    #
+    #     """
+    #     transform = transforms.Compose([
+    #         transforms.Resize((224, 224)),
+    #         transforms.ToTensor()
+    #     ])
+    #     train_dir = os.path.join(self.data_dir, 'tbcr')
+    #     full_dataset = ImageFolder(train_dir, transform=transform)
+    #     train_dataset, val_dataset, test_dataset = self.split_dataset(full_dataset)
+    #
+    #     return train_dataset, test_dataset, val_dataset, full_dataset.classes
 
     # Dataset #5: ccts
-    def load_ccts(self):
+    def load_ccts(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
         """
         Chest CT-Scan images Dataset
         https://www.kaggle.com/datasets/mohamedhanyyy/chest-ctscan-images
 
-        Loads the CCTS dataset and returns the training, validation, and test datasets.
-        Returns:
-            tuple: A tuple containing:
-                - train_dataset (torch.utils.data.Dataset): The training dataset.
-                - test_dataset (torch.utils.data.Dataset): The test dataset.
-                - val_dataset (torch.utils.data.Dataset): The validation dataset.
-                - classes (list): List of class labels.
         """
-        transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),  # Ensure this line is present
-            # Add other transformations as necessary
-        ])
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        data_transforms = {
+            'train': transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.CenterCrop(256),
+                transforms.RandomCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+            'val': transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.CenterCrop(256),
+                transforms.RandomCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+            'test': transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+        }
+
+
         train_dir = os.path.join(self.data_dir, 'ccts', 'train')
         test_dir = os.path.join(self.data_dir, 'ccts', 'test')
         valid_dir = os.path.join(self.data_dir, 'ccts', 'valid')
-        train_dataset = ImageFolder(train_dir, transform=transform)
-        test_dataset = ImageFolder(test_dir, transform=transform)
-        valid_dataset = ImageFolder(valid_dir, transform=transform)
-        return train_dataset, test_dataset, valid_dataset, train_dataset.classes
+
+        train_dataset = ImageFolder(train_dir, data_transforms['train'])
+        test_dataset = ImageFolder(test_dir, data_transforms['test'])
+        val_dataset = ImageFolder(valid_dir, data_transforms['val'])
+
+        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, train_dataset)
+        train_loader = torch.utils.data.DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
+                                                   num_workers=num_workers, pin_memory=pin_memory)
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers,
+                                                 pin_memory=pin_memory)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=test_batch_size, num_workers=num_workers,
+                                                  pin_memory=pin_memory)
+
+        return train_loader, val_loader, test_loader
 
     # Dataset #6: rotc
-    def load_rotc(self):
+    def load_rotc(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
         """
         Loads the ROTC dataset and returns DataLoaders for the training, validation, and test datasets.
 
-
-        Returns:
-            tuple: A tuple containing:
-                - train_loader (torch.utils.data.DataLoader): The DataLoader for the training dataset.
-                - val_loader (torch.utils.data.DataLoader): The DataLoader for the validation dataset.
-                - test_loader (torch.utils.data.DataLoader): The DataLoader for the test dataset.
-                - classes (list): List of class labels.
         """
-        transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor()
-        ])
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        data_transforms = {
+            'train': transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.CenterCrop(256),
+                transforms.RandomCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+            'val': transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.CenterCrop(256),
+                transforms.RandomCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+            'test': transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+        }
+
         train_dir = os.path.join(self.data_dir, 'rotc', 'train')
         val_dir = os.path.join(self.data_dir, 'rotc', 'val')
         test_dir = os.path.join(self.data_dir, 'rotc', 'test')
 
-        train_dataset = ImageFolder(train_dir, transform=transform)
-        val_dataset = ImageFolder(val_dir, transform=transform)
-        test_dataset = ImageFolder(test_dir, transform=transform)
 
-        return train_dataset, val_dataset, test_dataset, train_dataset.classes
+        train_dataset = ImageFolder(train_dir, data_transforms['train'])
+        val_dataset = ImageFolder(val_dir, data_transforms['val'])
+        test_dataset = ImageFolder(test_dir, data_transforms['test'])
+
+        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, train_dataset)
+        train_loader = torch.utils.data.DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
+                                                   num_workers=num_workers, pin_memory=pin_memory)
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers,
+                                                 pin_memory=pin_memory)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=test_batch_size, num_workers=num_workers,
+                                                  pin_memory=pin_memory)
+
+        return train_loader, val_loader, test_loader
 
     def load_miccai_brats2020(self):
         """
         Loads the MICCAI BraTS2020 dataset and returns the training, validation, and test datasets.
 
-        Returns:
-            tuple: A tuple containing:
-                - train_dataset (torch.utils.data.Dataset): The combined training dataset (including validation if available).
-                - val_dataset (torch.utils.data.Dataset or None): The validation dataset, or None if not available.
-                - test_dataset (torch.utils.data.Dataset or None): The test dataset, or None if not available.
-                - classes (None): This dataset does not use class labels in this implementation.
         """
         train_dir = os.path.join(self.data_dir, 'miccai_brats2020', 'MICCAI_BraTS2020_TrainingData')
         val_dir = os.path.join(self.data_dir, 'miccai_brats2020', 'MICCAI_BraTS2020_ValidationData')
@@ -256,14 +301,6 @@ class DatasetLoader:
         Splits the dataset into training, validation, and test sets based on specified proportions.
         If the dataset cannot be split (e.g., it is None or empty), returns a tuple of (None, None, None).
 
-        Args:
-            dataset (torch.utils.data.Dataset): The dataset to split.
-
-        Returns:
-            tuple: A tuple containing:
-                - train_dataset (torch.utils.data.Dataset or None): The training dataset.
-                - val_dataset (torch.utils.data.Dataset or None): The validation dataset.
-                - test_dataset (torch.utils.data.Dataset or None): The test dataset.
         """
         if dataset is None or len(dataset) == 0:
             return None, None, None
@@ -288,34 +325,97 @@ class DatasetLoader:
             raise ValueError("Dataset is too small to be split into train, "
                              "validation, and test sets with the specified proportions.")
 
-    def get_input_channels(self):
+    def get_input_channels(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
         """
         Retrieves the number of input channels from the training dataset.
+
+        Args:
+            train_batch_size (int): Batch size for the training DataLoader.
+            val_batch_size (int): Batch size for the validation DataLoader.
+            test_batch_size (int): Batch size for the test DataLoader.
+            num_workers (int): Number of worker processes for data loading.
+            pin_memory (bool): Whether to use pinned memory for data loading.
 
         Returns:
             int: The number of input channels in the dataset.
         """
-        loaded_datasets = self.load()  # Renamed variable
-        train_dataset = loaded_datasets[0]
+        train_loader, val_loader, test_loader = self.load(train_batch_size, val_batch_size, test_batch_size,
+                                                          num_workers, pin_memory)
+        train_dataset = train_loader.dataset
         sample_img, _ = train_dataset[0]
         return sample_img.shape[0]
 
-    def print_class_counts(self):
-        """
-        Logs the count of samples per class in the dataset.
-        """
-        logging.info("Calling print_class_counts method")
-        train_dir = os.path.join(self.data_dir, self.dataset_name, 'Train')
-        if not os.path.exists(train_dir):
-            data_dir = os.path.join(self.data_dir, self.dataset_name)
-        else:
-            data_dir = train_dir
-        dataset = ImageFolder(data_dir)
-        class_counts = [0] * len(dataset.classes)
-        for _, label in dataset:
-            class_counts[label] += 1
-        logging.info(f"All classes: {dataset.classes}")
-        logging.info(f"All class counts: {class_counts}")
+    # def print_class_counts(self):
+    #     """
+    #     Logs the count of samples per class in the dataset and returns the class names and their counts.
+    #
+    #     Returns:
+    #         tuple: A tuple containing:
+    #             - classes (list): The list of class names.
+    #             - class_counts (list): The list of counts for each class.
+    #     """
+    #     logging.info("Calling print_class_counts method")
+    #     train_dir_capital = os.path.join(self.data_dir, self.dataset_name, 'Train')
+    #     train_dir_small = os.path.join(self.data_dir, self.dataset_name, 'train')
+    #
+    #     if os.path.exists(train_dir_capital):
+    #         data_dir = train_dir_capital
+    #     elif os.path.exists(train_dir_small):
+    #         data_dir = train_dir_small
+    #     else:
+    #         data_dir = os.path.join(self.data_dir, self.dataset_name)
+    #
+    #     dataset = ImageFolder(data_dir)
+    #     class_counts = [0] * len(dataset.classes)
+    #     for _, label in dataset:
+    #         class_counts[label] += 1
+    #     logging.info(f"All classes: {dataset.classes}")
+    #     logging.info(f"All class counts: {class_counts}")
+    #     return dataset.classes, class_counts
+
+    @staticmethod
+    def get_WeightedRandom_Sampler(subset_dataset, original_dataset):
+        # Access the original dataset from the Subset object
+        original_dataset = original_dataset.dataset if isinstance(original_dataset,
+                                                                  torch.utils.data.Subset) else original_dataset
+
+        dataLoader = DataLoader(subset_dataset, batch_size=512)
+
+        All_target = []
+        for _, (_, targets) in enumerate(dataLoader):
+            for i in range(targets.shape[0]):
+                All_target.append(targets[i].item())
+
+        target = np.array(All_target)
+        print("\nClass distribution in the dataset:")
+        for i, class_name in enumerate(original_dataset.classes):
+            print(f"Class {class_name}: {np.sum(target == i)}")
+
+        class_sample_count = np.array(
+            [len(np.where(target == t)[0]) for t in np.unique(target)])
+
+        weight = 1. / class_sample_count
+
+        samples_weight = np.array([weight[t] for t in target])
+        samples_weight = torch.from_numpy(samples_weight)
+        samples_weight = samples_weight.double()
+
+        Sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
+
+        return Sampler
+
+    @staticmethod
+    def get_dataloader_target_class_number(dataLoader):
+        All_target_2 = []
+        for batch_idx, (inputs, targets) in enumerate(dataLoader):
+            for i in range(targets.shape[0]):
+                All_target_2.append(targets[i].item())
+
+        data = np.array(All_target_2)
+        unique_classes, counts = np.unique(data, return_counts=True)
+        print("Unique classes and their counts in the dataset:")
+        for cls, count in zip(unique_classes, counts):
+            print(f"Class {dataLoader.dataset.classes[cls]}: {count}")
 
     class CustomImageDataset(Dataset):
         """

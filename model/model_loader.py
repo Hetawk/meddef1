@@ -3,6 +3,7 @@ import os
 
 import torch
 from model.alexnet_model import AlexNetModel
+from model.meddef import MedDef
 from model.resnet_model import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
 from model.densenet_model import DenseNet121, DenseNet169, DenseNet201, DenseNet264
 from model.resnext_model import ResNeXt50, ResNeXt101_32x8d, ResNeXt101_64x4d
@@ -19,6 +20,7 @@ class ModelLoader:
     def __init__(self, device):
         self.device = device
         self.models_dict = {
+            # 'meddef': MedDef,
             # 'alexnet': AlexNetModel,
             # 'resnet18': ResNet18,
             # 'resnet34': ResNet34,
@@ -27,7 +29,7 @@ class ModelLoader:
             # 'resnet152': ResNet152,
             # 'transformer': TransformerModel,
             # 'conditional_diffusion': ConditionalDiffusionModel,
-            # 'densenet121': DenseNet121,
+            'densenet121': DenseNet121,
             # 'densenet169': DenseNet169,
             # 'densenet201': DenseNet201,
             # 'densenet264': DenseNet264,
@@ -70,27 +72,21 @@ class ModelLoader:
 
         model_class = self.models_dict[model_name]
         model = model_class(pretrained=pretrained, input_channels=input_channels, num_classes=num_classes)
-        # if model_name.startswith(('resnet', 'densenet', 'resnext', 'mobilenet')):
-        #     model = model_class(pretrained=pretrained, input_channels=input_channels, num_classes=num_classes)
-        # elif model_name == 'hybrid_resnet_densenet':
-        #     model = model_class(num_blocks_resnet=[3, 4, 6, 3], num_blocks_densenet=[6, 12, 32, 32],
-        #                         pretrained_resnet=pretrained, pretrained_densenet=pretrained,
-        #                         input_channels=input_channels, num_classes=num_classes)
-        # else:
-        #     model = model_class(input_channels=input_channels, num_classes=num_classes)
 
         if torch.cuda.is_available():
             model = model.to(self.device)
         return model
 
-    def load_pretrained_model(self, model_name, load_task, dataset_name):
-        model_class = self.models_dict.get(model_name)
-        if model_class is None:
-            raise ValueError(f"Model {model_name} not found.")
-        # Ensure that num_classes and other required parameters are set correctly
-        # model = model_class(pretrained=False)  # Initialize the model with required parameters
-        model = model_class()  # Initialize the model with required parameters
-        model = model.to(self.device)  # Move the model to the appropriate device
+    def load_pretrained_model(self, model_name, load_task, dataset_name, input_channels=3, num_classes=None):
+        if model_name not in self.models_dict:
+            raise ValueError(f"Model {model_name} not recognized.")
+
+        if num_classes is None:
+            raise ValueError("num_classes must be specified")
+
+        model_class = self.models_dict[model_name]
+        model = model_class(pretrained=False, input_channels=input_channels, num_classes=num_classes)
+        model = model.to(self.device)
 
         model_path = f"out/{load_task}/{dataset_name}/save_model/best_{model_name}_{dataset_name}.pth"
         if os.path.isfile(model_path):

@@ -7,17 +7,18 @@ import torch
 import pandas as pd
 import numpy as np
 from torch import nn
+import random
+from torch.cuda.amp import GradScaler, autocast
 
+from arg_parser import get_args
 from gan.defense.adv_train import AdversarialTraining
 from utils.robustness.regularization import Regularization
 from utils.timer import Timer
 from utils.algorithms.supervised import SupervisedLearning
 
-
 class Trainer:
     def __init__(self, model, train_loader, val_loader, test_loader, optimizer, criterion, model_name, task_name,
-                 dataset_name, device, lambda_l2=0.0, dropout_rate=0.5, alpha=0.01, attack_loader=None,
-                 scheduler=None, cross_validator=None, adversarial=False):
+                 dataset_name, device, args, attack_loader=None, scheduler=None, cross_validator=None, adversarial=False):
         self.scheduler = scheduler
         self.cross_validator = cross_validator
         self.model = model
@@ -29,12 +30,13 @@ class Trainer:
         self.criterion = criterion
         self.model_name = model_name
         self.dataset_name = dataset_name
-        self.lambda_l2 = lambda_l2
-        self.dropout_rate = dropout_rate
-        self.alpha = alpha
+        self.lambda_l2 = args.lambda_l2
+        self.dropout_rate = args.drop
+        self.alpha = args.alpha
+        self.patience = args.patience
         self.attack_loader = attack_loader
         self.timer = Timer()
-        self.epochs = 0
+        self.epochs = args.epochs
         self.history = {
             'epoch': [],
             'loss': [],
@@ -49,6 +51,7 @@ class Trainer:
         self.device = device
         self.model.to(self.device)
         self.has_trained = False
+        self.args = args
 
         Regularization.apply_dropout(self.model, self.dropout_rate)
 
@@ -58,22 +61,38 @@ class Trainer:
         self.adversarial = adversarial
         if adversarial:
             self.adversarial_training = AdversarialTraining(model, criterion, epsilon=0.3, alpha=0.01)
+        self.scaler = GradScaler()
+        self.accumulation_steps = 1
 
-    def train(self, epochs, patience=5, adversarial=False):
+        # Set random seed for reproducibility
+        self.set_random_seed(args.manualSeed)
+
+    def set_random_seed(self, seed):
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+
+    def train(self, patience, adversarial=False):
         if self.has_trained:
             logging.warning(f"{self.model} has already been trained. Training again will overwrite the existing model.")
             return
         logging.info(f"Training {self.model_name}...")
         self.has_trained = True
 
-        self.epochs = epochs
+        torch.cuda.empty_cache()
+
+        # Set CUDA_LAUNCH_BLOCKING
+        os.environ['CUDA_LAUNCH_BLOCKING'] = str(self.device)
+
         self.model.train()
         best_loss = float('inf')
         patience_counter = 0
         total_batches = len(self.train_loader)
         log_points = [0, total_batches // 2, total_batches - 1]
 
-        for epoch in range(epochs):
+        for epoch in range(self.epochs):
             epoch_loss = 0.0
             correct = 0
             total = 0
@@ -85,8 +104,10 @@ class Trainer:
                 data, target = data.to(self.device), target.to(self.device)
                 data.requires_grad = adversarial
 
-                output = self.model(data)
-                loss = self.criterion(output, target)
+                with autocast():
+                    output = self.model(data)
+                    loss = self.criterion(output, target)
+                    loss = loss / self.accumulation_steps  # Normalize loss
 
                 if self.adversarial:
                     adv_loss = self.adversarial_training.adversarial_loss(data, target)
@@ -96,12 +117,14 @@ class Trainer:
                                                                 log_message=(batch_idx == 0))
                 loss = Regularization.integrate_regularization(loss, l2_reg, log_message=(batch_idx == 0))
 
-                self.optimizer.zero_grad()
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                self.optimizer.step()
+                self.scaler.scale(loss).backward()
 
-                epoch_loss += loss.item()
+                if (batch_idx + 1) % self.accumulation_steps == 0:
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                    self.optimizer.zero_grad()
+
+                epoch_loss += loss.item() * self.accumulation_steps  # Accumulate the actual loss
                 pred = output.argmax(dim=1, keepdim=True)
                 correct += pred.eq(target.view_as(pred)).sum().item()
                 total += target.size(0)
@@ -113,18 +136,18 @@ class Trainer:
                     accuracy = correct / total
                     end_time = datetime.now()
                     duration = Timer.format_duration((end_time - start_time).total_seconds())
-                    logging.info(f'Epoch: {epoch + 1}/{self.epochs}, '
-                                 f'Batch: {batch_idx * len(data)}/{len(self.train_loader.dataset)}, '
-                                 f'Loss: {loss.item():.4f}, Accuracy: {accuracy:.4f} ')
+                    logging.info(f'Epoch: {epoch + 1}/{self.epochs} '
+                                 f'| Batch: {batch_idx * len(data)}/{len(self.train_loader.dataset)} '
+                                 f'| Loss: {loss.item():.4f} | Accuracy: {accuracy:.4f} ')
 
             val_loss, val_accuracy = self.validate()
             accuracy = correct / total
             epoch_loss /= len(self.train_loader)
             end_time = datetime.now()
             epoch_duration = Timer.format_duration((end_time - start_time).total_seconds())
-            logging.info(f'Epoch: {epoch + 1}/{self.epochs}, Loss: {epoch_loss:.4f}, Accuracy: {accuracy:.4f}, '
-                         f'Val Loss: {val_loss:.4f}, Val Accuracy: {val_accuracy:.4f},'
-                         f'Duration: {epoch_duration}')
+            logging.info(f'Epoch: {epoch + 1}/{self.epochs} | Loss: {epoch_loss:.4f}  | Accu: {accuracy:.4f}  '
+                         f'| V_loss: {val_loss:.4f} | V_accu: {val_accuracy:.4f} '
+                         f'| Duration: {epoch_duration}')
 
             self.history['epoch'].append(epoch + 1)
             self.history['loss'].append(epoch_loss)
@@ -199,7 +222,11 @@ class Trainer:
         self.model.train()
 
     def save_model(self, path):
-        path = os.path.join("out", self.task_name, self.dataset_name, path)
+        timestamp = datetime.now().strftime("%Y%m%d")
+        filename, ext = os.path.splitext(path)
+        # Include epochs, learning rate, and batch size in the filename
+        filename = f"{filename}_epochs{self.epochs}_lr{self.args.lr}_batch{self.args.train_batch}_{timestamp}{ext}"
+        path = os.path.join("out", self.task_name, self.dataset_name, filename)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save(self.model.state_dict(), path)
         logging.info(f'Model saved to {path}')

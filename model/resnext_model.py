@@ -159,5 +159,5 @@ def ResNeXt101_32x8d(cardinality=32, num_classes=None, input_channels=3, pretrai
     return ResNeXtModel(ResNeXtBlock, [3, 4, 23, 3], cardinality, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained)
 
 
-def ResNeXt101_64x4d(cardinality=32, num_classes=None, input_channels=3, pretrained=False):
-    return ResNeXtModel(ResNeXtBlock, [3, 8, 36, 3], cardinality, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained)
+def ResNeXt101_64x4d(cardinality=64, num_classes=None, input_channels=3, pretrained=False):
+    return ResNeXtModel(ResNeXtBlock, [3, 4, 23, 3], cardinality, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained)
