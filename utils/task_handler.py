@@ -33,60 +33,64 @@ class TaskHandler:
         self.trained_models = {}
 
     def run_train(self):
-        """Runs the training process for all datasets and models."""
+        """Runs the training process for the specified dataset and models."""
         self.current_task = 'normal_training'
         logging.info("Training task selected.")
         all_results = []
 
-        for dataset_name, (train_loader, val_loader, test_loader) in self.datasets_dict.items():
-            logging.info(f"Processing dataset: {dataset_name}")
-            input_channels = self.input_channels_dict.get(dataset_name)
-            logging.info(f"Input channels for {dataset_name}: {input_channels}")
+        # Use only the specified dataset
+        dataset_name = self.dataset_name
+        if dataset_name not in self.datasets_dict:
+            raise ValueError(f"Dataset {dataset_name} not found in datasets_dict.")
 
-            model_list = []
-            model_names_list = []
-            true_labels_dict = {}
-            predictions_dict = {}
+        dataset_loader = self.datasets_dict[dataset_name]
+        train_loader, val_loader, test_loader = dataset_loader.load(
+            train_batch_size=self.args.train_batch,
+            val_batch_size=self.args.test_batch,
+            test_batch_size=self.args.test_batch,
+            num_workers=self.args.workers,
+            pin_memory=self.args.pin_memory
+        )
+        logging.info(f"Processing dataset: {dataset_name}")
+        input_channels = self.input_channels_dict.get(dataset_name)
+        logging.info(f"Input channels for {dataset_name}: {input_channels}")
 
-            evaluator = None
-            for model_name in self.models_loader.models_dict.keys():
-                logging.info(f"Loading model: {model_name}")
+        model_list = []
+        model_names_list = []
+        true_labels_dict = {}
+        predictions_dict = {}
 
-                # Check if the model has already been trained
-                if model_name in self.trained_models:
-                    model, trainer = self.trained_models[model_name]
-                    logging.info(f"Model {model_name} already trained. Skipping training.")
-                else:
-                    model, trainer = self.train_and_evaluate_model(model_name, dataset_name,
-                                                                   train_loader, val_loader, test_loader,
-                                                                   input_channels)
-                    self.trained_models[model_name] = (model, trainer)
+        for model_name in [self.args.arch]:  # Use the selected architecture
+            models = self.train_and_evaluate_model(
+                model_name, dataset_name, train_loader, val_loader, test_loader, input_channels, self.args.depth
+            )
 
+            for depth, (model, trainer) in models.items():
+                model_name_with_depth = f"{model_name}{depth}"
                 model_list.append(model)
-                model_names_list.append(model_name)
+                model_names_list.append(model_name_with_depth)
                 true_labels, predictions = trainer.get_test_results()
-                true_labels_dict[model_name] = [label.tolist() for label in true_labels]
-                predictions_dict[model_name] = [pred.tolist() for pred in predictions]
+                true_labels_dict[model_name_with_depth] = [label.tolist() for label in true_labels]
+                predictions_dict[model_name_with_depth] = [pred.tolist() for pred in predictions]
 
-                evaluator = Evaluator(model_name, [], true_labels, predictions, self.current_task)
+                evaluator = Evaluator(model_name_with_depth, [], true_labels, predictions, self.current_task)
                 evaluator.evaluate(dataset_name)
                 all_results.append(evaluator)
 
-            # Extract unique labels from true_labels_dict
-            unique_labels = set()
-            for labels in true_labels_dict.values():
-                unique_labels.update(labels)
+        # Extract unique labels from true_labels_dict
+        unique_labels = set()
+        for labels in true_labels_dict.values():
+            unique_labels.update(labels)
 
-            class_names = self.classes.get(dataset_name, [])
-            # Ensure class_names includes all unique labels
-            class_names = list(set(class_names).union(unique_labels))
+        class_names = self.classes.get(dataset_name, [])
+        # Ensure class_names includes all unique labels
+        class_names = list(set(class_names).union(unique_labels))
 
-            logging.info(f"True labels: {true_labels_dict}")
-            logging.info(f"Predictions: {predictions_dict}")
-            self.visualization.visualize_normal(model_names_list, (true_labels_dict, predictions_dict),
-                                                self.current_task, dataset_name, class_names)
-            if evaluator is not None:
-                all_results.extend(evaluator.results)
+        logging.info(f"True labels: {true_labels_dict}")
+        logging.info(f"Predictions: {predictions_dict}")
+        self.visualization.visualize_normal(
+            model_names_list, (true_labels_dict, predictions_dict), self.current_task, dataset_name, class_names
+        )
 
     def run_attack(self):
         self.current_task = 'attack'
@@ -260,65 +264,70 @@ class TaskHandler:
         return adv_examples_dict
 
     # utils/task_handler.py
-
-    # utils/task_handler.py
-
     def train_and_evaluate_model(self, model_name, dataset_name, train_loader, val_loader, test_loader, input_channels,
-                                 adversarial=False):
-        """Trains and evaluates a model using DataLoader instances."""
+                                 depths, adversarial=False):
+        """Trains and evaluates models for each specified depth using DataLoader instances."""
 
         # Pass num_classes correctly
         class_names = self.classes.get(dataset_name, [])
         num_classes = len(class_names)
         if num_classes <= 2:
             raise ValueError(f"Number of classes for dataset {dataset_name} is {num_classes}, which seems incorrect.")
-        model = self.models_loader.get_model(model_name, input_channels=input_channels, num_classes=num_classes)
-        model.to(self.device)
 
-        # Calculate and print the total number of parameters in the model
-        total_params = sum(p.numel() for p in model.parameters()) / 1000000.0
-        logging.info(f'Total parameters for {model_name}: {total_params:.2f}M')
+        models = {}
 
-        hyperparams = self.hyperparams_dict[dataset_name]
-        optimizer = self.optimizers_dict.get_optimizer(
-            hyperparams['optimizer'], model.parameters(),
-            lr=hyperparams['lr'],
-            momentum=hyperparams.get('momentum', 0)
-        )
+        for depth in depths:
+            model, model_name_with_depth = self.models_loader.get_model(
+                model_name, depth=depth, input_channels=input_channels, num_classes=num_classes
+            )
+            model.to(self.device)
 
-        if self.current_task in ['defense', 'attack']:
-            adversarial = True
+            # Calculate and print the total number of parameters in the model
+            total_params = sum(p.numel() for p in model.parameters()) / 1000000.0
+            logging.info(f'Total parameters for {model_name_with_depth}: {total_params:.2f}M')
 
-        if self.current_task is None or dataset_name is None:
-            raise ValueError("Task name or dataset name is not set.")
+            hyperparams = self.hyperparams_dict[dataset_name]
+            optimizer = self.optimizers_dict.get_optimizer(
+                hyperparams['optimizer'], model.parameters(),
+                lr=hyperparams['lr'],
+                momentum=hyperparams.get('momentum', 0)
+            )
 
-        trainer = Trainer(
-            model=model,
-            train_loader=train_loader,
-            val_loader=val_loader,
-            test_loader=test_loader,
-            optimizer=optimizer,
-            criterion=self.criterion,
-            model_name=model_name,
-            task_name=self.current_task,
-            dataset_name=dataset_name,
-            device=self.device,
-            args=self.args,  # Pass args here
-            attack_loader=self.attack_loader,
-            scheduler=self.lr_scheduler_loader.get_scheduler(
-                hyperparams['scheduler'], optimizer, **hyperparams['scheduler_params']
-            ) if self.lr_scheduler_loader else None,
-            cross_validator=self.cross_validator
-        )
+            if self.current_task in ['defense', 'attack']:
+                adversarial = True
 
-        if adversarial:
-            # Use adversarial training
-            trainer.train(patience=hyperparams['patience'], adversarial=True)
-        else:
-            # Use normal training
-            trainer.train(patience=hyperparams['patience'])
+            if self.current_task is None or dataset_name is None:
+                raise ValueError("Task name or dataset name is not set.")
 
-        trainer.test()
-        model.trained = True
+            trainer = Trainer(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                test_loader=test_loader,
+                optimizer=optimizer,
+                criterion=self.criterion,
+                model_name=model_name_with_depth,
+                task_name=self.current_task,
+                dataset_name=dataset_name,
+                device=self.device,
+                args=self.args,  # Pass args here
+                attack_loader=self.attack_loader,
+                scheduler=self.lr_scheduler_loader.get_scheduler(
+                    hyperparams['scheduler'], optimizer, **hyperparams['scheduler_params']
+                ) if self.lr_scheduler_loader else None,
+                cross_validator=self.cross_validator
+            )
 
-        return model, trainer
+            if adversarial:
+                # Use adversarial training
+                trainer.train(patience=hyperparams['patience'], adversarial=True)
+            else:
+                # Use normal training
+                trainer.train(patience=hyperparams['patience'])
+
+            trainer.test()
+            model.trained = True
+
+            models[depth] = (model, trainer)
+
+        return models

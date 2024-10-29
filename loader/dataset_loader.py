@@ -47,7 +47,7 @@ class DatasetLoader:
             'ccts': self.load_ccts,
             # 'tbcr': self.load_tbcr,
             'scisic': self.load_scisic,
-            'rotc': self.load_rotc,
+            # 'rotc': self.load_rotc,
 
             # Add more datasets here...
         }
@@ -73,7 +73,7 @@ class DatasetLoader:
             'ccts': DatasetLoader('ccts', data_dir),
             # 'tbcr': DatasetLoader('tbcr', data_dir),
             'scisic': DatasetLoader('scisic', data_dir),
-            'rotc': DatasetLoader('rotc', data_dir),
+            # 'rotc': DatasetLoader('rotc', data_dir),
         }
 
     def load(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
@@ -389,7 +389,7 @@ class DatasetLoader:
         target = np.array(All_target)
         print("\nClass distribution in the dataset:")
         for i, class_name in enumerate(original_dataset.classes):
-            print(f"Class {class_name}: {np.sum(target == i)}")
+            print(f"{class_name}: {np.sum(target == i)}")
 
         class_sample_count = np.array(
             [len(np.where(target == t)[0]) for t in np.unique(target)])
@@ -415,7 +415,7 @@ class DatasetLoader:
         unique_classes, counts = np.unique(data, return_counts=True)
         print("Unique classes and their counts in the dataset:")
         for cls, count in zip(unique_classes, counts):
-            print(f"Class {dataLoader.dataset.classes[cls]}: {count}")
+            print(f"{dataLoader.dataset.classes[cls]}: {count}")
 
     class CustomImageDataset(Dataset):
         """

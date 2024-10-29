@@ -6,11 +6,8 @@ from datetime import datetime
 import torch
 import pandas as pd
 import numpy as np
-from torch import nn
 import random
 from torch.cuda.amp import GradScaler, autocast
-
-from arg_parser import get_args
 from gan.defense.adv_train import AdversarialTraining
 from utils.robustness.regularization import Regularization
 from utils.timer import Timer

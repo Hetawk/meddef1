@@ -1,9 +1,7 @@
 # arg_parser.py
 import argparse
 import os
-
 import torch
-
 
 def get_args():
     parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
@@ -14,7 +12,7 @@ def get_args():
                         help='number of data loading workers (default: 4)')
     parser.add_argument('--use_cross_validator', action='store_true', help='Use cross validation')
     # Optimization options
-    parser.add_argument('--epochs', default=30, type=int, metavar='N', help='number of total epochs to run')
+    parser.add_argument('--epochs', default=3, type=int, metavar='N', help='number of total epochs to run')
     parser.add_argument('--start-epoch', default=0, type=int, metavar='N', help='manual epoch number (useful on restarts)')
     parser.add_argument('--train-batch', default=64, type=int, metavar='N', help='train batchsize (default: 256)')
     parser.add_argument('--test-batch', default=32, type=int, metavar='N', help='test batchsize (default: 200)')
@@ -36,7 +34,7 @@ def get_args():
     parser.add_argument('--resume', default='', type=str, metavar='PATH', help='path to latest checkpoint (default: none)')
     # Architecture
     parser.add_argument('--arch', '-a', metavar='ARCH', default='')
-    parser.add_argument('--depth', type=int, default=18, help='Model depth.')
+    parser.add_argument('--depth', type=int, nargs='+', default=[18], help='Model depth(s).')
     parser.add_argument('--cardinality', type=int, default=32, help='Meddef cardinality (group).')
     parser.add_argument('--base-width', type=int, default=4, help='Meddef base width.')
     parser.add_argument('--widen-factor', type=int, default=4, help='Widen factor. 4 -> 64, 8 -> 128, ...')
@@ -56,6 +54,10 @@ def get_args():
                         help='Task to run: normal_training, attack, or defense')
 
     args = parser.parse_args()
+
+    # Ensure depth is always a list
+    if isinstance(args.depth, int):
+        args.depth = [args.depth]
 
     # Use CUDA
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_ids

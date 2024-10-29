@@ -14,9 +14,9 @@ class GlobalAttention(BaseAttention):
     def forward(self, query, key, value, mask=None):
         batch_size = query.size(0)
 
-        query = self.split_heads(query, batch_size)
-        key = self.split_heads(key, batch_size)
-        value = self.split_heads(value, batch_size)
+        query = self.split_heads(self.wq(query), batch_size)
+        key = self.split_heads(self.wk(key), batch_size)
+        value = self.split_heads(self.wv(value), batch_size)
 
         # Compute attention scores
         scores = torch.matmul(query, key.transpose(-2, -1)) * self.scale

@@ -1,6 +1,3 @@
-import torch
-import torch.nn as nn
-from .resnet_model import *  # Import your ResNet50 model
 from .densenet_model import *  # Import your DenseNet121 model
 
 

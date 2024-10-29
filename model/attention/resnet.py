@@ -1,9 +1,7 @@
 import torch
 import torch.nn as nn
-import torchvision.models as models
-import logging
-from urllib.request import urlopen
 from torch.hub import load_state_dict_from_url
+from typing import Type, Tuple, Dict, Union
 
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
@@ -13,10 +11,11 @@ model_urls = {
     'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
 }
 
+
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, in_channels, out_channels, stride=1):
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1):
         super(BasicBlock, self).__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(out_channels)
@@ -30,7 +29,7 @@ class BasicBlock(nn.Module):
                 nn.BatchNorm2d(out_channels)
             )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
         out = self.conv1(x)
         out = self.bn1(out)
@@ -43,10 +42,11 @@ class BasicBlock(nn.Module):
         out = self.relu(out)
         return out
 
+
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, in_channels, out_channels, stride=1):
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1):
         super(Bottleneck, self).__init__()
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
         self.bn1 = nn.BatchNorm2d(out_channels)
@@ -62,7 +62,7 @@ class Bottleneck(nn.Module):
                 nn.BatchNorm2d(out_channels * self.expansion)
             )
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
         out = self.conv1(x)
         out = self.bn1(out)
@@ -80,7 +80,8 @@ class Bottleneck(nn.Module):
 
 
 class ResNetModel(nn.Module):
-    def __init__(self, block, layers, num_classes, input_channels=3, pretrained=False):
+    def __init__(self, block: Union[Type[BasicBlock], Type[Bottleneck]], layers: Tuple[int, int, int, int],
+                 num_classes: int, input_channels: int = 3, pretrained: bool = False):
         super(ResNetModel, self).__init__()
         self.in_channels = 64
         self.block_expansion = block.expansion
@@ -98,7 +99,7 @@ class ResNetModel(nn.Module):
         if pretrained:
             self.load_pretrained_weights(block, layers, num_classes, input_channels)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -112,7 +113,8 @@ class ResNetModel(nn.Module):
         x = self.fc(x)
         return x
 
-    def make_layer(self, block, out_channels, blocks, stride=1):
+    def make_layer(self, block: Union[Type[BasicBlock], Type[Bottleneck]], out_channels: int, blocks: int,
+                   stride: int = 1) -> nn.Sequential:
         layers = []
         layers.append(block(self.in_channels, out_channels, stride))
         self.in_channels = out_channels * block.expansion
@@ -120,18 +122,18 @@ class ResNetModel(nn.Module):
             layers.append(block(self.in_channels, out_channels))
         return nn.Sequential(*layers)
 
-    def load_pretrained_weights(self, block, layers, num_classes, input_channels):
-        if block == BasicBlock and layers == [2, 2, 2, 2]:
-            url = model_urls['resnet18']
-        elif block == BasicBlock and layers == [3, 4, 6, 3]:
-            url = model_urls['resnet34']
-        elif block == Bottleneck and layers == [3, 4, 6, 3]:
-            url = model_urls['resnet50']
-        elif block == Bottleneck and layers == [3, 4, 23, 3]:
-            url = model_urls['resnet101']
-        elif block == Bottleneck and layers == [3, 8, 36, 3]:
-            url = model_urls['resnet152']
-        else:
+    def load_pretrained_weights(self, block: Union[Type[BasicBlock], Type[Bottleneck]],
+                                layers: Tuple[int, int, int, int], num_classes: int, input_channels: int):
+        depth_to_url: Dict[Union[Tuple[Type[BasicBlock], Tuple[int, int, int, int]], Tuple[
+            Type[Bottleneck], Tuple[int, int, int, int]]], str] = {
+            (BasicBlock, (2, 2, 2, 2)): model_urls['resnet18'],
+            (BasicBlock, (3, 4, 6, 3)): model_urls['resnet34'],
+            (Bottleneck, (3, 4, 6, 3)): model_urls['resnet50'],
+            (Bottleneck, (3, 4, 23, 3)): model_urls['resnet101'],
+            (Bottleneck, (3, 8, 36, 3)): model_urls['resnet152'],
+        }
+        url = depth_to_url.get((block, layers))
+        if url is None:
             raise ValueError("No pretrained model available for the specified architecture.")
 
         pretrained_dict = load_state_dict_from_url(url, progress=True)
@@ -145,29 +147,28 @@ class ResNetModel(nn.Module):
 
         self.fc = nn.Linear(512 * self.block_expansion, num_classes)
 
+
 def check_num_classes(func):
     def wrapper(*args, **kwargs):
         num_classes = kwargs.get('num_classes')
         if num_classes is None:
             raise ValueError("num_classes must be specified")
         return func(*args, **kwargs)
+
     return wrapper
-@check_num_classes
-def ResNet18(pretrained=False, input_channels=3, num_classes=None):
-    return ResNetModel(BasicBlock, [2, 2, 2, 2], num_classes=num_classes, pretrained=pretrained, input_channels=input_channels)
+
 
 @check_num_classes
-def ResNet34(pretrained=False, input_channels=3, num_classes=None):
-    return ResNetModel(BasicBlock, [3, 4, 6, 3], num_classes=num_classes, pretrained=pretrained, input_channels=input_channels)
+def get_resnet(depth: int, pretrained: bool = False, input_channels: int = 3, num_classes: int = None) -> ResNetModel:
+    depth_to_block_layers = {
+        18: (BasicBlock, (2, 2, 2, 2)),
+        34: (BasicBlock, (3, 4, 6, 3)),
+        50: (Bottleneck, (3, 4, 6, 3)),
+        101: (Bottleneck, (3, 4, 23, 3)),
+        152: (Bottleneck, (3, 8, 36, 3)),
+    }
+    if depth not in depth_to_block_layers:
+        raise ValueError(f"Unsupported ResNet depth: {depth}")
 
-@check_num_classes
-def ResNet50(pretrained=False, input_channels=3, num_classes=None):
-    return ResNetModel(Bottleneck, [3, 4, 6, 3], num_classes=num_classes, pretrained=pretrained, input_channels=input_channels)
-
-@check_num_classes
-def ResNet101(pretrained=False, input_channels=3, num_classes=None):
-    return ResNetModel(Bottleneck, [3, 4, 23, 3], num_classes=num_classes, pretrained=pretrained, input_channels=input_channels)
-
-@check_num_classes
-def ResNet152(pretrained=False, input_channels=3, num_classes=None):
-    return ResNetModel(Bottleneck, [3, 8, 36, 3], num_classes=num_classes, pretrained=pretrained, input_channels=input_channels)
+    block, layers = depth_to_block_layers[depth]
+    return ResNetModel(block, layers, num_classes=num_classes, pretrained=pretrained, input_channels=input_channels)

@@ -1,8 +1,6 @@
 # main.py
-import argparse
-import json
+
 import logging
-import os
 import random
 import sys
 
@@ -12,13 +10,11 @@ from torch import nn
 
 from loader.dataset_loader import DatasetLoader
 from model.model_loader import ModelLoader
-from train import Trainer
 from utils.logger import setup_logger
 from utils.robustness.optimizers import OptimizerLoader
 from utils.task_handler import TaskHandler
 from utils.robustness.lr_scheduler import LRSchedulerLoader
 from utils.robustness.cross_validation import CrossValidator  # Import CrossValidator
-from utils.evaluator import Evaluator
 from arg_parser import get_args
 
 print("Torch version: ", torch.__version__)
@@ -51,7 +47,11 @@ if torch.cuda.is_available():
 # Use the get_all_datasets static method from the DatasetLoader class to get the dictionary of all datasets
 datasets_dict = DatasetLoader.get_all_datasets()
 
-models_dict = ModelLoader(args.device)  # Pass device argument when creating ModelLoader instance
+# Check if a specific dataset is provided in the command line arguments
+if args.data:
+    datasets_dict = {args.data: datasets_dict[args.data]}
+
+models_dict = ModelLoader(args.device, args.arch)  # Pass device argument when creating ModelLoader instance
 optimizers_dict = OptimizerLoader()
 lr_scheduler_loader = LRSchedulerLoader()  # Initialize LRSchedulerLoader
 
@@ -105,45 +105,44 @@ for dataset_name, dataset_loader in datasets_dict.items():
 
     # Iterate over each model in models_dict
     for model_name, model_class in models_dict.models_dict.items():
-        # Initialize CrossValidator
-        cross_validator = CrossValidator(
-            dataset=train_loader.dataset,
-            model=models_dict.models_dict[model_name],
-            model_name=model_name,  # Pass the actual model name
-            dataset_name=dataset_name,  # Pass the actual dataset name
-            criterion=nn.CrossEntropyLoss(),
-            optimizer_class=optimizers_dict.optimizers_dict[hyperparams['optimizer']],  # Pass the optimizer class
-            optimizer_params={'lr': hyperparams['lr'], 'momentum': hyperparams['momentum']},
-            # Pass the optimizer parameters
-            hyperparams=hyperparams,
-            num_classes=num_classes,
-            device=args.device,
-            args=args,
-            attack_loader=None,
-            scheduler=None,
-            cross_validator=None
-        )
+        for depth in args.depth:
+            cross_validator = CrossValidator(
+                dataset=train_loader.dataset,
+                model=models_dict.models_dict[model_name],
+                model_name=model_name,
+                dataset_name=dataset_name,
+                criterion=nn.CrossEntropyLoss(),
+                optimizer_class=optimizers_dict.optimizers_dict[hyperparams['optimizer']],
+                optimizer_params={'lr': hyperparams['lr'], 'momentum': hyperparams['momentum']},
+                hyperparams=hyperparams,
+                num_classes=num_classes,
+                device=args.device,
+                args=args,
+                attack_loader=None,
+                scheduler=None,
+                cross_validator=None
+            )
 
-        # Initialize TaskHandler with preprocessed datasets
-        task_handler = TaskHandler(
-            datasets_dict={dataset_name: (train_loader, val_loader, test_loader)},
-            models_loader=models_dict,
-            optimizers_dict=optimizers_dict,
-            hyperparams_dict={dataset_name: hyperparams},
-            input_channels_dict={dataset_name: input_channels},
-            classes={dataset_name: classes},  # Pass classes as a dictionary
-            dataset_name=dataset_name,
-            lr_scheduler_loader=lr_scheduler_loader,  # Pass lr_scheduler_loader
-            cross_validator=cross_validator,  # Pass cross_validator
-            device=args.device,
-            args=args
-        )
+            task_handler = TaskHandler(
+                datasets_dict={dataset_name: dataset_loader},  # Use only the specified dataset
+                models_loader=models_dict,
+                optimizers_dict=optimizers_dict,
+                hyperparams_dict={dataset_name: hyperparams},
+                input_channels_dict={dataset_name: input_channels},
+                classes={dataset_name: classes},
+                dataset_name=dataset_name,  # Pass the specified dataset name
+                lr_scheduler_loader=lr_scheduler_loader,
+                cross_validator=cross_validator,
+                device=args.device,
+                args=args
+            )
 
-        if args.task_name == 'normal_training':
-            task_handler.run_train()
-        elif args.task_name == 'attack':
-            task_handler.run_attack()
-        elif args.task_name == 'defense':
-            task_handler.run_defense()
-        else:
-            logging.error(f"Unknown task: {args.task_name}. No task was executed.")
+            task_handler.args.depth = [depth]  # Ensure depth is always a list
+            if args.task_name == 'normal_training':
+                task_handler.run_train()
+            elif args.task_name == 'attack':
+                task_handler.run_attack()
+            elif args.task_name == 'defense':
+                task_handler.run_defense()
+            else:
+                logging.error(f"Unknown task: {args.task_name}. No task was executed.")
