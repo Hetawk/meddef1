@@ -3,7 +3,7 @@ import torch
 import logging
 from model.backbone.resnet import get_resnet
 from model.densenet_model import get_densenet
-
+from model.attention.MSARNet import MSARNet
 
 class ModelLoader:
     def __init__(self, device, arch):
@@ -14,11 +14,13 @@ class ModelLoader:
         self.models_dict = {
             'resnet': {'func': get_resnet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'densenet': {'func': get_densenet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
+            'msarnet': {'func': MSARNet, 'params': ['depth', 'num_classes', 'input_channels', 'pretrained', 'robust_method_type', 'robust_method_params']},
             # Add other models here with their required parameters
         }
         logging.info("ModelLoader initialized with models: " + ", ".join(self.models_dict.keys()))
 
-    def get_model(self, model_name=None, depth=None, input_channels=3, num_classes=None, pretrained=True):
+    def get_model(self, model_name=None, depth=None, input_channels=3, num_classes=None, pretrained=True,
+                  robust_method_type=None, robust_method_params=None):
         """Retrieves a model based on specified architecture, depth, and configurations."""
         model_name = model_name or self.arch
 
@@ -37,7 +39,9 @@ class ModelLoader:
             'depth': depth,
             'pretrained': pretrained,
             'input_channels': input_channels,
-            'num_classes': num_classes
+            'num_classes': num_classes,
+            'robust_method_type': robust_method_type,
+            'robust_method_params': robust_method_params
         }
 
         # Filter the kwargs to only include the required parameters

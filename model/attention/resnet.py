@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch.hub import load_state_dict_from_url
 from typing import Type, Tuple, Dict, Union
+from model.base_robust_method import BaseRobustMethod
 
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
@@ -67,7 +68,7 @@ class Bottleneck(nn.Module):
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
-        out = self.conv2(out)
+        out = self.conv2(x)
         out = self.bn2(out)
         out = self.relu(out)
         out = self.conv3(out)
@@ -81,7 +82,8 @@ class Bottleneck(nn.Module):
 
 class ResNetModel(nn.Module):
     def __init__(self, block: Union[Type[BasicBlock], Type[Bottleneck]], layers: Tuple[int, int, int, int],
-                 num_classes: int, input_channels: int = 3, pretrained: bool = False):
+                 num_classes: int, input_channels: int = 3, pretrained: bool = False,
+                 robust_method: BaseRobustMethod = None):
         super(ResNetModel, self).__init__()
         self.in_channels = 64
         self.block_expansion = block.expansion
@@ -99,6 +101,8 @@ class ResNetModel(nn.Module):
         if pretrained:
             self.load_pretrained_weights(block, layers, num_classes, input_channels)
 
+        self.robust_method = robust_method
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv1(x)
         x = self.bn1(x)
@@ -110,6 +114,8 @@ class ResNetModel(nn.Module):
         x = self.layer4(x)
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
+        if self.robust_method:
+            x = self.robust_method(x)
         x = self.fc(x)
         return x
 
@@ -146,29 +152,3 @@ class ResNetModel(nn.Module):
             self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
 
         self.fc = nn.Linear(512 * self.block_expansion, num_classes)
-
-
-def check_num_classes(func):
-    def wrapper(*args, **kwargs):
-        num_classes = kwargs.get('num_classes')
-        if num_classes is None:
-            raise ValueError("num_classes must be specified")
-        return func(*args, **kwargs)
-
-    return wrapper
-
-
-@check_num_classes
-def get_resnet(depth: int, pretrained: bool = False, input_channels: int = 3, num_classes: int = None) -> ResNetModel:
-    depth_to_block_layers = {
-        18: (BasicBlock, (2, 2, 2, 2)),
-        34: (BasicBlock, (3, 4, 6, 3)),
-        50: (Bottleneck, (3, 4, 6, 3)),
-        101: (Bottleneck, (3, 4, 23, 3)),
-        152: (Bottleneck, (3, 8, 36, 3)),
-    }
-    if depth not in depth_to_block_layers:
-        raise ValueError(f"Unsupported ResNet depth: {depth}")
-
-    block, layers = depth_to_block_layers[depth]
-    return ResNetModel(block, layers, num_classes=num_classes, pretrained=pretrained, input_channels=input_channels)

@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from .attention.attention import Attention  # Import the Attention class
 
+
 class BaseRobustMethod(nn.Module):
     def __init__(self, method_type, input_dim, output_dim, **kwargs):
         super(BaseRobustMethod, self).__init__()

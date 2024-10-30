@@ -9,6 +9,8 @@ from .base.local_attention import LocalAttention
 from .base.hard_attention import HardAttention
 from .base.global_attention import GlobalAttention
 from .base.cross_attention import CrossAttention
+from .base.multi_head_attention import MultiHeadAttention
+from .base.spatial_attention import SpatialAttention
 
 
 class Attention(nn.Module):
@@ -33,6 +35,8 @@ class Attention(nn.Module):
             'hard': HardAttention,
             'global': GlobalAttention,
             'cross': CrossAttention,
+            'multi_head': MultiHeadAttention,
+            'spatial': SpatialAttention
         }
 
         # Initialize the attention layers as per specified types
