@@ -94,14 +94,17 @@ def process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_
     classes, num_classes = DatasetLoader.get_dataloader_target_class_number(train_loader)
 
     for model_name in args.arch:
-        if isinstance(args.depth, list):
-            depths = args.depth  # Get depths as a list directly
+        if isinstance(args.depth, dict):
+            depths = args.depth.get(model_name, [])
+            if not depths:
+                logging.warning(f"No depths specified for model {model_name}. Using default depth.")
+                depths = [None]
+        elif isinstance(args.depth, list):
+            depths = args.depth
         else:
-            depths = args.depth.get(model_name, [])  # Assume it's a dictionary if not a list
-            # Ensure depths is a list
-        if not isinstance(depths, list):
-            depths = [depths]
-        logging.info(f"Using depths for model {model_name}: {depths}")  # Debug line
+            depths = [args.depth]
+
+        logging.info(f"Using depths for model {model_name}: {depths}")
         for depth in depths:
             cross_validator = CrossValidator(
                 dataset=train_loader.dataset,

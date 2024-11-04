@@ -1,10 +1,13 @@
 # task_handler.py
 import logging
+import os
+from datetime import datetime
 
 import numpy as np
 import torch
 from gan.attack.attack_loader import AttackLoader
 from gan.defense.defense_loader import DefenseLoader
+from gan.defense.prune import Pruner
 from loader.dataset_loader import DatasetLoader
 from train import Trainer
 from utils.ensemble import Ensemble
@@ -111,6 +114,58 @@ class TaskHandler:
             self.classes[dataset_name]
         )
 
+    def run_defense(self):
+        self.current_task = 'defense'
+        logging.info("Defense task selected.")
+        all_results = []
+
+        dataset_name = self.dataset_name
+        if dataset_name not in self.datasets_dict:
+            raise ValueError(f"Dataset {dataset_name} not found in datasets_dict.")
+
+        dataset_loader = self.datasets_dict[dataset_name]
+        train_loader, val_loader, test_loader = dataset_loader.load(
+            train_batch_size=self.args.train_batch,
+            val_batch_size=self.args.test_batch,
+            test_batch_size=self.args.test_batch,
+            num_workers=self.args.workers,
+            pin_memory=self.args.pin_memory
+        )
+        logging.info(f"Processing dataset: {dataset_name}")
+        input_channels = self.input_channels_dict.get(dataset_name)
+        logging.info(f"Input channels for {dataset_name}: {input_channels}")
+
+        for model_name in self.args.arch:
+            if isinstance(self.args.depth, dict):
+                depths = self.args.depth.get(model_name, [])
+                if not depths:
+                    logging.warning(f"No depths specified for model {model_name}. Using default depth.")
+                    depths = [None]
+            elif isinstance(self.args.depth, list):
+                depths = self.args.depth
+            else:
+                depths = [self.args.depth]
+
+            for depth in depths:
+                if isinstance(depth, dict):
+                    raise ValueError(f"Depth for model {model_name} should be an integer, not a dictionary.")
+                model, model_name_with_depth = self.models_loader.get_model(
+                    model_name, depth=depth, input_channels=input_channels, num_classes=self.num_classes
+                )
+                model.to(self.device)
+
+                pruner = Pruner(model, self.args.prune_rate)
+                pruned_model = pruner.unstructured_prune()
+
+                # Save the pruned model using the proper path convention
+                timestamp = datetime.now().strftime("%Y%m%d")
+                filename = f"best_{model_name_with_depth}_{dataset_name}_pruned_{timestamp}.pth.tar"
+                path = os.path.join('out', self.current_task, dataset_name, model_name_with_depth, filename)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                pruner.save_checkpoint({'state_dict': pruned_model.state_dict()}, path)
+
+                logging.info(f"Pruned model {model_name_with_depth} saved successfully to {path}.")
+
     def run_attack(self):
         self.current_task = 'attack'
         logging.info("Attack task selected.")
@@ -159,64 +214,8 @@ class TaskHandler:
         # Save all results into consolidated CSV file
         # self.save_results(all_results)
 
-    def run_defense(self):
-        self.current_task = 'defense'
-        logging.info("Defense task selected.")
-        all_results = []
 
-        selected_defenses = [
-            'grad_mask',
-            'randomization',
-            'cert_defense',
-            'def_distill',
-            # Add more defenses as needed
-        ]
 
-        defenses = {}
-        robustness_results = {}
-        perturbations = {}
-        adv_examples_dict = {}
-        class_names = []
-
-        for dataset_name, (train_loader, val_loader, test_loader) in self.datasets_dict.items():
-            logging.info(f"Processing dataset: {dataset_name}")
-            input_channels = self.input_channels_dict.get(dataset_name)
-            # Fetch class names correctly
-            class_names = self.classes.get(dataset_name, [])
-
-            for model_name in self.models_loader.models_dict.keys():
-                logging.info(f"Loading model: {model_name}")
-                num_classes = len(class_names)  # Ensure num_classes is set correctly
-                model = self.models_loader.load_pretrained_model(model_name, 'normal_training', dataset_name)
-                model.to(self.device)
-
-                # Generate adversarial examples
-                self.attack_loader = AttackLoader(model)
-                adv_examples_dict = self.generate_adv_examples(test_loader)
-
-                # Apply selected defenses and collect results
-                self.defense_loader = DefenseLoader(model)
-                for defense_name in selected_defenses:
-                    logging.info(f"Applying defense: {defense_name}")
-                    defense = self.defense_loader.get_defense(defense_name)
-                    defense_results = self.apply_defense(defense, defense_name, adv_examples_dict, dataset_name,
-                                                         model_name, all_results, test_loader)
-
-                    defenses[defense_name] = defense
-                    robustness_results[defense_name] = defense_results
-                    perturbations[defense_name] = self.compute_perturbation_data(defense, adv_examples_dict)
-
-        # Call the visualization method with collected data
-        if adv_examples_dict and class_names:
-            self.visualization.visualize_defense(
-                defenses=defenses,
-                adv_examples_dict=adv_examples_dict,
-                robustness_results=robustness_results,
-                perturbations=perturbations,
-                class_names=class_names,
-                task_name=self.current_task,
-                dataset_name=self.dataset_name
-            )
 
     def apply_defense(self, defense, defense_name, adv_examples_dict, dataset_name, model_name, all_results,
                       test_loader):

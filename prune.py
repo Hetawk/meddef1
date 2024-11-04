@@ -51,7 +51,7 @@ def test(model, loader, name):
 
 data = 'scisic'
 depth = 50
-arch = 'CBAM'
+arch = 'resnet'
 batch_size = 16
 # prunerate = 0.2
 # Data loading code

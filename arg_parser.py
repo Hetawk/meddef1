@@ -47,6 +47,9 @@ def get_args():
     # Task to run
     parser.add_argument('--task_name', type=str, choices=['normal_training', 'attack', 'defense'], default='normal_training', help='Task to run: normal_training, attack, or defense')
 
+    # Defense options
+    parser.add_argument('--prune_rate', type=float, default=0.2, help='Pruning rate for unstructured pruning')
+    
     args = parser.parse_args()
 
     # Ensure depth is always a dictionary
