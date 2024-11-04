@@ -11,6 +11,7 @@ dataset/
 oooooout/
 out/
 out_ref/
+data/
 .idea
 meddef.zip
 # Byte-compiled / optimized / DLL files

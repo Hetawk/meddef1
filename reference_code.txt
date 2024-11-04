@@ -1,0 +1,2675 @@
+# main.py
+
+import logging
+import torch
+import torchvision
+from loader.dataset_loader import DatasetLoader
+from model.base_model import ModelLoader
+from utils.logger import setup_logger
+from utils.robustness.cross_validation import CrossValidator
+from utils.robustness.optimizers import OptimizerLoader
+from utils.helper import TaskHandler
+from utils.robustness.lr_scheduler import LRSchedulerLoader
+
+print("Torch version: ", torch.__version__)
+print("Torchvision version: ", torchvision.__version__)
+print("CUDA available: ", torch.cuda.is_available())
+# Set up logging
+setup_logger('out/logger.txt')
+logging.info("Main script started.")
+
+# Use the get_all_datasets static method from the DatasetLoader class to get the dictionary of all datasets
+datasets_dict = DatasetLoader.get_all_datasets()
+
+# device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+# Determine device based on GPU availability -> linux server
+device = torch.device('cuda:1' if torch.cuda.is_available() else 'cpu')
+# Determine device based on GPU availability -> using local computer with gpu
+# device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')  # Determine device based on GPU availability
+
+models_dict = ModelLoader(device)  # Pass device argument when creating ModelLoader instance
+optimizers_dict = OptimizerLoader()
+lr_scheduler_loader = LRSchedulerLoader()  # Initialize LRSchedulerLoader
+
+# Define a single set of hyperparameters to be used for all datasets
+hyperparams = {
+    'epochs': 2,
+    'lr': 0.001,
+    'momentum': 0.9,
+    'patience': 5,
+    'lambda_l2': 0.01,
+    'dropout_rate': 0.5,
+    'optimizer': 'adam',
+    'batch_size': 32,
+}
+
+task_to_run = (  # Uncomment the task that you wish to run
+    'train'
+    # 'attack'
+    # 'defense'
+)
+# Iterate over each dataset in datasets_dict
+for dataset_name, dataset_loader in datasets_dict.items():
+    datasets = dataset_loader.load()
+    train_dataset, val_dataset, test_dataset = datasets[:3]
+    classes = datasets[-1]
+    input_channels = dataset_loader.get_input_channels()
+
+    # Initialize task_handler outside the model iteration
+    task_handler = TaskHandler(
+        {dataset_name: dataset_loader},
+        models_dict,
+        optimizers_dict,
+        {dataset_name: hyperparams},
+        {dataset_name: input_channels},
+        classes,
+        dataset_name,
+        lr_scheduler_loader,
+        None,  # Placeholder for CrossValidator parameters
+        device
+    )
+
+    if task_to_run == 'train':
+        task_handler.run_train()
+    elif task_to_run == 'attack':
+        task_handler.run_attack()
+    elif task_to_run == 'defense':
+        task_handler.run_defense()
+
+
+
+
+# helper.py
+import pandas as pd
+import logging
+import torch
+import os
+
+from gan.attack.attack_loader import AttackLoader
+from gan.defense.defense_loader import DefenseLoader
+from loader.dataset_loader import DatasetLoader
+from loader.preprocess import Preprocessor
+from train import Trainer
+from utils.ensemble import Ensemble
+from utils.evaluator import Evaluator
+from utils.robustness.cross_validation import CrossValidator
+from utils.visual.normal_visual import visualize_all
+from utils.visual.visualization import Visualization
+
+
+class TaskHandler:
+    def __init__(self, datasets_dict, models_loader, optimizers_dict, hyperparams_dict, input_channels_dict, classes,
+                 dataset_name, lr_scheduler_loader=None, cross_validator=None, device=None):
+        self.classes = classes
+        self.dataset_name = dataset_name
+        self.datasets_dict = datasets_dict
+        self.current_task = None
+        self.models_loader = models_loader
+        self.optimizers_dict = optimizers_dict
+        self.lr_scheduler_loader = lr_scheduler_loader
+        self.cross_validator = cross_validator
+        self.hyperparams_dict = hyperparams_dict
+        self.input_channels_dict = input_channels_dict
+        self.visualization = Visualization()
+        self.attack_loader = None
+        self.defense_loader = None
+        self.criterion = torch.nn.CrossEntropyLoss()
+        self.device = device
+
+    def run_train(self):
+        """Runs the training process for all datasets and models."""
+        self.current_task = 'normal_training'
+        logging.info("Training task selected.")
+        all_results = []
+
+        for dataset_name, dataset_loader in self.datasets_dict.items():
+            logging.info(f"Processing dataset: {dataset_name}")
+            train_dataset, val_dataset, test_dataset = dataset_loader.load()
+            input_channels = self.input_channels_dict.get(dataset_name)
+            logging.info(f"Input channels for {dataset_name}: {input_channels}")
+
+            model_list = []
+            model_names_list = []
+            true_labels_dict = {}
+            predictions_dict = {}
+
+            evaluator = None
+            for model_name in self.models_loader.models_dict.keys():
+                logging.info(f"Loading model: {model_name}")
+                model, trainer = self.train_and_evaluate_model(model_name, dataset_name,
+                                                               train_dataset, val_dataset, test_dataset,
+                                                               input_channels)
+                model_list.append(model)
+                model_names_list.append(model_name)
+                true_labels, predictions = trainer.get_test_results()
+                true_labels_dict[model_name] = true_labels
+                predictions_dict[model_name] = predictions
+
+                evaluator = Evaluator(model_name, [], true_labels, predictions, self.current_task)
+                evaluator.evaluate(dataset_name)
+                all_results.append(evaluator)
+
+            # dataset_loader = DatasetLoader(self.dataset_name)
+            # class_names = dataset_loader.get_and_print_classes()
+            # self.visualization.visualize_normal(model_names_list, (true_labels_dict, predictions_dict),
+            #                                     self.current_task, dataset_name, class_names)
+            # visualize_all(model_names_list, (true_labels_dict, predictions_dict), self.current_task, dataset_name,
+            #               class_names)
+            if evaluator is not None:
+                all_results.extend(evaluator.results)
+
+    def run_attack(self):
+        self.current_task = 'attack'
+        logging.info("Attack task selected.")
+        all_results = []
+
+        for dataset_name, dataset_loader in self.datasets_dict.items():
+            logging.info(f"Processing dataset: {dataset_name}")
+            _, test_dataset, _ = dataset_loader.load()
+
+            model_names = [] # Empty list to store our models
+            batch_size = self.hyperparams_dict[dataset_name]['batch_size']
+
+            for model_name in self.models_loader.models_dict.keys():
+                logging.info(f"Loading model: {model_name}")
+                # Load the pre-trained model from the normal_training task
+                model = self.models_loader.load_pretrained_model(model_name, 'normal_training', self.dataset_name)
+
+                model_names.append(model_name)
+                test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+                model.to(self.device)
+
+                # Assign the new AttackLoader instance to self.attack_loader
+                self.attack_loader = AttackLoader(model)
+                for attack_name in self.attack_loader.attacks_dict.keys():
+                    logging.info(f"Running attack: {attack_name}")
+                    attack = self.attack_loader.get_attack(attack_name)
+
+                    adv_examples_list = []
+                    for batch_idx, (data, labels) in enumerate(test_loader):
+                        if batch_idx >= 3:  # Limit to 3 batches to avoid excessive loops
+                            break
+                        data, labels = data.to(self.device), labels.to(self.device)
+                        adv_example = attack.attack(data, labels)  # adv_example can be a tuple of length 2 or 3
+
+                        # Ensure the tensors have the same size
+                        min_size = min(len(adv_example[1]), len(data))
+                        adv_example = (adv_example[0][:min_size], adv_example[1][:min_size]) + tuple(adv_example[2:])
+
+                        # Check if data and adv_example are not empty
+                        if data.size(0) > 0 and adv_example[1].size(0) > 0:
+                            # Ensure adv_examples_list is a tuple of length 2 or 3
+                            if len(adv_example) in [2, 3]:
+                                adv_examples_list.append(
+                                    adv_example)  # Store original and adversarial examples as a tuple
+                            else:
+                                logging.error(
+                                    f"Unexpected data format for batch {batch_idx}. Expected a tuple of length 2 or 3.")
+                        else:
+                            logging.info(f"Skipping batch {batch_idx} due to empty data or adv_example.")
+
+                    # Visualize adversarial examples
+                    self.visualization.visualize_attack(adv_examples_list, model_names, self.current_task, dataset_name,
+                                                        attack_name)
+
+                    # Log or save adversarial examples as needed
+                    logging.info(
+                        f"Generated {len(adv_examples_list)} adversarial examples for dataset: {dataset_name} using attack: {attack_name}")
+
+                    # Collect results for saving
+                    all_results.append({
+                        'dataset_name': dataset_name,
+                        'model_name': model_name,
+                        'attack_name': attack_name,
+                        'adv_examples': adv_examples_list
+                    })
+
+        # Save all results into consolidated CSV file
+        # self.save_results(all_results)
+
+    def run_defense(self):
+        self.current_task = 'defense'
+        logging.info("Defense task selected.")
+        for dataset_name, dataset_loader in self.datasets_dict.items():
+            logging.info(f"Processing dataset: {dataset_name}")
+            train_dataset, test_dataset = dataset_loader.load()
+            input_channels = self.input_channels_dict[dataset_name]
+
+            preprocessor = Preprocessor(dataset_name, 'base_model_name')
+            train_dataset, test_dataset = preprocessor.preprocess(train_dataset, test_dataset)
+
+            for model_name in self.models_loader.models_dict.keys():
+                logging.info(f"Loading model: {model_name}")
+                model, _ = self.train_and_evaluate_model(model_name, dataset_name, train_dataset, test_dataset,
+                                                         input_channels)  # Ensure the model is trained
+                self.defense_loader.model = model
+                # Attack phase
+                attack_loader = AttackLoader(model)
+                for attack_name in attack_loader.attacks_dict.keys():
+                    logging.info(f"Running attack: {attack_name}")
+                    attack = attack_loader.get_attack(attack_name)
+                    adv_examples = attack.attack(train_dataset.data, train_dataset.targets)
+
+                    # Defense phase
+                    defense_loader = DefenseLoader(model)
+                    for defense_name in defense_loader.defenses_dict.keys():
+                        logging.info(f"Running defense: {defense_name}")
+                        defense = defense_loader.get_defense(defense_name)
+                        defended_model = defense.defend(adv_examples, train_dataset.targets)
+
+                        # Train the defended model
+                        adv_train_dataset = torch.utils.data.TensorDataset(adv_examples, train_dataset.targets)
+                        defended_model, trainer = self.train_and_evaluate_model(defended_model, dataset_name,
+                                                                                adv_train_dataset,
+                                                                                test_dataset,
+                                                                                input_channels,
+                                                                                adversarial=True)  # Train the model on adversarial examples
+
+                self.visualization.visualize_defense((trainer.true_labels, trainer.predictions))
+
+    def train_and_evaluate_model(self, model_name, dataset_name, train_dataset, val_dataset, test_dataset,
+                                 input_channels, adversarial=False):
+        """Trains and evaluates a model."""
+        preprocessor = Preprocessor(model_name, dataset_name, task_name=self.current_task)
+        train_dataset, val_dataset, test_dataset = preprocessor.preprocess(train_dataset, val_dataset, test_dataset)
+
+        # Use batch_size from hyperparams_dict
+        batch_size = self.hyperparams_dict[dataset_name]['batch_size']
+
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size,
+                                                 shuffle=False) if val_dataset is not None else None
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        model = self.models_loader.get_model(model_name, input_channels=input_channels)
+        model.to(self.device)
+
+        hyperparams = self.hyperparams_dict[dataset_name]
+        optimizer = self.optimizers_dict.get_optimizer(hyperparams['optimizer'], model.parameters(),
+                                                       lr=hyperparams['lr'], momentum=hyperparams.get('momentum', 0))
+
+        if self.current_task in ['defense']:
+            adversarial = True
+
+        if self.current_task is None or dataset_name is None:
+            raise ValueError("Task name or dataset name is not set.")
+
+        # Initialize scheduler and cross-validator if they exist
+        scheduler = self.lr_scheduler_loader.get_scheduler('ReduceLROnPlateau', optimizer, patience=hyperparams[
+            'patience']) if self.lr_scheduler_loader else None
+        cross_validator = CrossValidator(train_loader.dataset, model, self.criterion, optimizer, hyperparams,
+                                         num_folds=5) if self.cross_validator else None
+
+        trainer = Trainer(
+            model,
+            train_loader,
+            val_loader,
+            test_loader,
+            optimizer,
+            torch.nn.CrossEntropyLoss(),
+            model_name,
+            self.current_task,
+            dataset_name,
+            device=self.device,
+            lambda_l2=hyperparams['lambda_l2'],
+            dropout_rate=hyperparams['dropout_rate'],
+            alpha=hyperparams.get('alpha', 0.01),
+            attack_loader=self.attack_loader,
+            scheduler=scheduler,
+            cross_validator=cross_validator
+        )
+
+        if adversarial:
+            # Use adversarial training
+            trainer.train_adversarial(epochs=hyperparams['epochs'], patience=hyperparams['patience'])
+        else:
+            # Use normal training
+            trainer.train(epochs=hyperparams['epochs'], patience=hyperparams['patience'])
+
+        trainer.test()
+        model.trained = True
+
+        return model, trainer
+
+
+import time
+import logging
+
+
+class Timer:
+    def __init__(self):
+        self.start_time = None
+        logging.info("Timer initialized.")
+
+    @staticmethod
+    def format_duration(seconds):
+        """
+        Format duration from seconds to hours, minutes, and seconds.
+
+        Args:
+        - seconds (int): Duration in seconds.
+
+        Returns:
+        - Formatted duration string.
+        """
+        m, s = divmod(seconds, 60)
+        h, m = divmod(m, 60)
+        h, m, s = int(h), int(m), int(s)
+        hour_str = f"{h} {'hr' if h == 1 else 'hrs'}"
+        min_str = f"{m} {'min' if m == 1 else 'mins'}"
+        sec_str = f"{s} {'sec' if s == 1 else 'secs'}"
+        duration_str = f"{hour_str}, {min_str}, {sec_str}"
+        return duration_str
+
+    @staticmethod
+    def early_stopping(patience, validation_losses):
+        if len(validation_losses) > patience and validation_losses[-1] > min(validation_losses[-patience - 1:-1]):
+            logging.info("Early stopping triggered.")
+            return True
+        return False
+
+
+
+import os
+import logging
+
+def setup_logger(log_file):
+    directory = os.path.dirname(log_file)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
+    )
+    logging.info("Logger initialized.")
+
+
+
+    # metrics.py
+
+import numpy as np
+import pandas as pd
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score,
+    f1_score, confusion_matrix, balanced_accuracy_score,
+    matthews_corrcoef, roc_auc_score, average_precision_score
+)
+import logging
+
+class Metrics:
+    @staticmethod
+    def calculate_metrics(true_labels, all_predictions, all_probabilities=None):
+        metrics = {}
+
+        metrics['accuracy'] = accuracy_score(true_labels, all_predictions)
+        metrics['precision'] = precision_score(true_labels, all_predictions, average='macro', zero_division=0)
+        metrics['recall'] = recall_score(true_labels, all_predictions, average='macro', zero_division=0)
+        metrics['f1'] = f1_score(true_labels, all_predictions, average='macro', zero_division=0)
+
+        metrics['precision_micro'] = precision_score(true_labels, all_predictions, average='micro', zero_division=0)
+        metrics['precision_weighted'] = precision_score(true_labels, all_predictions, average='weighted', zero_division=0)
+        metrics['recall_micro'] = recall_score(true_labels, all_predictions, average='micro', zero_division=0)
+        metrics['recall_weighted'] = recall_score(true_labels, all_predictions, average='weighted', zero_division=0)
+        metrics['f1_micro'] = f1_score(true_labels, all_predictions, average='micro', zero_division=0)
+        metrics['f1_weighted'] = f1_score(true_labels, all_predictions, average='weighted', zero_division=0)
+
+        # Specificity calculation
+        cm = confusion_matrix(true_labels, all_predictions)
+        tn = cm.sum() - (cm.sum(axis=1) - cm.diagonal()).sum() - (
+                cm.sum(axis=0) - cm.diagonal()).sum() + cm.diagonal().sum()
+        metrics['specificity'] = tn / (tn + cm.sum(axis=1) - cm.diagonal()).sum()
+
+        metrics['balanced_accuracy'] = balanced_accuracy_score(true_labels, all_predictions)
+        metrics['mcc'] = matthews_corrcoef(true_labels, all_predictions)
+
+        # Ensure the correct shape for ROC-AUC calculation
+        if all_probabilities is not None and len(np.unique(true_labels)) == 2:
+            metrics['roc_auc'] = roc_auc_score(true_labels, all_probabilities)
+            metrics['average_precision'] = average_precision_score(true_labels, all_probabilities)
+        else:
+            metrics['roc_auc'] = None
+            metrics['average_precision'] = None
+
+        # Calculate TP, TN, FP, FN for multi-class confusion matrix
+        tp = np.diag(cm)
+        fp = cm.sum(axis=0) - tp
+        fn = cm.sum(axis=1) - tp
+        tn = cm.sum() - (fp + fn + tp)
+
+        metrics['confusion_matrix'] = cm.tolist()  # Convert numpy array to list for JSON serialization
+        metrics['tp'] = tp.tolist()
+        metrics['tn'] = tn.tolist()
+        metrics['fp'] = fp.tolist()
+        metrics['fn'] = fn.tolist()
+
+        return metrics
+
+
+# evaluator.py
+
+import pandas as pd
+import os
+import logging
+from utils.metrics import Metrics
+import pandas.errors
+
+class Evaluator:
+    def __init__(self, model_name, results, true_labels, all_predictions, task_name, all_probabilities=None):
+        self.model_name = model_name
+        self.results = results
+        self.true_labels = true_labels
+        self.all_predictions = all_predictions
+        self.task_name = task_name
+        self.all_probabilities = all_probabilities
+
+    def evaluate(self, dataset_name):
+        # Ensure true_labels and all_predictions are lists or arrays
+        if isinstance(self.true_labels, str):
+            self.true_labels = list(map(int, self.true_labels.split(',')))
+        if isinstance(self.all_predictions, str):
+            self.all_predictions = list(map(int, self.all_predictions.split(',')))
+        metrics = Metrics.calculate_metrics(self.true_labels, self.all_predictions, self.all_probabilities)
+
+        # Log and save metrics to CSV
+        self.log_metrics(metrics)
+        self.save_metrics(metrics, dataset_name)
+
+        # Add results to self.results
+        for i in range(len(self.true_labels)):
+            self.results.append({
+                'Model': self.model_name,
+                'True Label': self.true_labels[i],
+                'Predicted Label': self.all_predictions[i]
+            })
+
+    def log_metrics(self, metrics):
+        for key, value in metrics.items():
+            logging.info(f"{key}: {value}")
+
+    def save_metrics(self, metrics, dataset_name):
+        metrics_df = pd.DataFrame([{
+            'Model': self.model_name,
+            'Accuracy': metrics['accuracy'],
+            'Precision': metrics['precision'],
+            'Precision Micro': metrics['precision_micro'],
+            'Precision Weighted': metrics['precision_weighted'],
+            'Recall': metrics['recall'],
+            'Recall Micro': metrics['recall_micro'],
+            'Recall Weighted': metrics['recall_weighted'],
+            'F1 Score': metrics['f1'],
+            'F1 Micro': metrics['f1_micro'],
+            'F1 Weighted': metrics['f1_weighted'],
+            'Specificity': metrics['specificity'],
+            'Balanced Accuracy': metrics['balanced_accuracy'],
+            'MCC': metrics['mcc'],
+            'ROC AUC': metrics['roc_auc'],
+            'Average Precision': metrics['average_precision'],
+            'TP': metrics['tp'],
+            'TN': metrics['tn'],
+            'FP': metrics['fp'],
+            'FN': metrics['fn']
+        }])
+        metrics_csv_path = os.path.join('out', self.task_name, dataset_name,
+                                        f"all_evaluation_metrics.csv")
+        os.makedirs(os.path.dirname(metrics_csv_path), exist_ok=True)
+
+        if os.path.isfile(metrics_csv_path) and os.path.getsize(metrics_csv_path) > 0:
+            existing_df = pd.read_csv(metrics_csv_path)
+            metrics_df = pd.concat([existing_df, metrics_df], ignore_index=True)
+
+        metrics_df.to_csv(metrics_csv_path, index=False)
+        logging.info(f"Metrics saved to {metrics_csv_path}")
+
+
+
+# ensemble.py
+import os
+
+import numpy as np
+import pandas as pd
+import torch
+import logging
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+from sklearn.preprocessing import OneHotEncoder
+
+
+class Ensemble:
+    def __init__(self, models, model_names, dataset_name, train_dataset, test_dataset, task_name):
+        self.models = models
+        self.model_names = model_names
+        self.dataset_name = dataset_name
+        self.train_dataset = train_dataset
+        self.test_dataset = test_dataset
+        self.task_name = task_name
+
+    def predict(self, loader):
+        all_preds = []
+
+        for model in self.models:
+            model.eval()
+            model.to(next(model.parameters()).device)  # Move model to the same device as the data
+            preds = []
+
+            with torch.no_grad():
+                for data, _ in loader:
+                    data = data.to(next(model.parameters()).device)  # Move data to the same device as the model
+                    output = model(data)
+                    preds.append(output)
+
+            all_preds.append(torch.cat(preds))
+
+        avg_preds = torch.mean(torch.stack(all_preds), dim=0)
+        _, predicted = torch.max(avg_preds, 1)
+        return predicted.cpu().numpy()  # Convert tensor to numpy array
+
+    def save_models(self, path, dataset_name):
+        for model, model_name in zip(self.models, self.model_names):
+            model_path = os.path.join(path, f"{dataset_name}_{model_name}.pth")
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            torch.save(model.state_dict(), model_path)
+            logging.info(f'Model {model_name} saved to {model_path}')
+
+    def save_predictions(self, predictions, model_name, accuracy, precision, recall, f1_score, auc_roc, path,
+                         dataset_name):
+        # Check if predictions is a list or a numpy array
+        if not isinstance(predictions, (list, np.ndarray)):
+            raise ValueError("Predictions must be a list or a numpy array.")
+
+        # Check if performance metrics are numbers
+        metrics = [accuracy, precision, recall, f1_score, auc_roc]
+        if not all(isinstance(metric, (int, float)) for metric in metrics):
+            raise ValueError("Performance metrics must be numbers.")
+
+        predictions_csv_path = os.path.join(path, f"{dataset_name}_ensemble_predictions.csv")
+        os.makedirs(os.path.dirname(predictions_csv_path), exist_ok=True)
+
+        # Create a DataFrame with the new data
+        new_df = pd.DataFrame({
+            'Model Name': model_name,
+            'Predictions': predictions,
+            'Accuracy': accuracy,
+            'Precision': precision,
+            'Recall': recall,
+            'F1 Score': f1_score,
+            'AUC-ROC': auc_roc
+        })
+
+        # Check if the file already exists
+        if os.path.isfile(predictions_csv_path):
+            df = pd.read_csv(predictions_csv_path)
+            df = pd.concat([df, new_df])
+        else:
+            df = new_df
+
+        df.to_csv(predictions_csv_path, index=False)
+        logging.info(f"Ensemble predictions saved to {predictions_csv_path}")
+
+    def predict_with_ensemble(self):
+        # Use the DataLoader for the test data
+        test_loader = torch.utils.data.DataLoader(self.test_dataset, batch_size=64, shuffle=False)
+
+        # Make predictions using the ensemble
+        ensemble_predictions = self.predict(test_loader)
+
+        # Check if ensemble_predictions is a list or a numpy array
+        if not isinstance(ensemble_predictions, (list, np.ndarray)):
+            raise TypeError("ensemble_predictions must be a list or a numpy array.")
+
+        # Get the true labels of the test data
+        true_labels = []
+        for _, label in test_loader:
+            true_labels.extend(label.tolist())
+
+        # Calculate performance metrics
+        accuracy = accuracy_score(true_labels, ensemble_predictions)
+        precision = precision_score(true_labels, ensemble_predictions, average='macro')
+        recall = recall_score(true_labels, ensemble_predictions, average='macro')
+        f1 = f1_score(true_labels, ensemble_predictions, average='macro')
+        auc_roc = roc_auc_score(true_labels, ensemble_predictions, multi_class='ovr')
+
+        # Save the ensemble predictions
+        self.save_predictions(ensemble_predictions, 'ensemble', accuracy, precision, recall, f1, auc_roc,
+                              os.path.join('out', self.task_name, self.dataset_name), self.dataset_name)
+
+        # Convert ensemble_predictions and true_labels to one-hot encoded labels
+        encoder = OneHotEncoder()
+        ensemble_predictions_one_hot = encoder.fit_transform(ensemble_predictions.reshape(-1, 1)).toarray()
+        true_labels_one_hot = encoder.transform(np.array(true_labels).reshape(-1, 1)).toarray()
+
+        return true_labels_one_hot, ensemble_predictions_one_hot
+
+
+# cross_validator.py
+
+import logging
+import torch
+from torch.utils.data import DataLoader, Subset
+from sklearn.model_selection import KFold
+import numpy as np
+
+from train import Trainer
+
+
+class CrossValidator:
+    def __init__(self, dataset, model, criterion, optimizer, hyperparams, num_folds=5):
+        self.dataset = dataset
+        self.model = model
+        self.criterion = criterion
+        self.optimizer = optimizer
+        self.num_folds = num_folds
+        self.batch_size = hyperparams['batch_size']
+        self.num_epochs = hyperparams['epochs']
+        self.logger = logging.getLogger(__name__)
+
+    def run(self):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        kfold = KFold(n_splits=self.num_folds, shuffle=True)
+        fold_results = []
+
+        for fold, (train_ids, val_ids) in enumerate(kfold.split(self.dataset)):
+            self.logger.info(f'Fold {fold + 1}/{self.num_folds}')
+            train_subsampler = Subset(self.dataset, train_ids)
+            val_subsampler = Subset(self.dataset, val_ids)
+
+            train_loader = DataLoader(train_subsampler, batch_size=self.batch_size, shuffle=True)
+            val_loader = DataLoader(val_subsampler, batch_size=self.batch_size, shuffle=False)
+
+            model = self.model().to(device)
+            optimizer = self.optimizer(model.parameters())
+
+            trainer = Trainer(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                test_loader=val_loader,
+                optimizer=optimizer,
+                criterion=self.criterion,
+                model_name='cross_val_model',
+                task_name='cross_val_task',
+                dataset_name='cross_val_dataset'
+            )
+            trainer.train(self.num_epochs)
+            val_loss, val_accuracy = trainer.validate()
+            self.logger.info(f'Fold {fold + 1} - Loss: {val_loss:.4f}, Accuracy: {val_accuracy:.4f}')
+            fold_results.append((val_loss, val_accuracy))
+
+        avg_loss = np.mean([result[0] for result in fold_results])
+        avg_accuracy = np.mean([result[1] for result in fold_results])
+        self.logger.info(f'Cross-Validation Results - Average Loss: {avg_loss:.4f}, Average Accuracy: {avg_accuracy:.4f}')
+
+        return fold_results, avg_loss, avg_accuracy
+
+
+
+# lr_scheduler.py
+
+import torch.optim.lr_scheduler as lr_scheduler
+import logging
+
+class LRSchedulerLoader:
+    def __init__(self):
+        self.schedulers_dict = {
+            'StepLR': lr_scheduler.StepLR,
+            'ExponentialLR': lr_scheduler.ExponentialLR,
+            'ReduceLROnPlateau': lr_scheduler.ReduceLROnPlateau,
+            # Add other schedulers as needed
+        }
+        self.logger = logging.getLogger(__name__)
+        self.logger.info("LRSchedulerLoader initialized with schedulers: " + ", ".join(self.schedulers_dict.keys()))
+
+    def get_scheduler(self, scheduler_name, optimizer, **kwargs):
+        if scheduler_name in self.schedulers_dict:
+            self.logger.info(f"Loading LR scheduler: {scheduler_name} with params: {kwargs}")
+            return self.schedulers_dict[scheduler_name](optimizer, **kwargs)
+        else:
+            raise ValueError(f"LR Scheduler {scheduler_name} not recognized.")
+
+# optimizer.py
+
+import torch.optim as optim
+import logging
+
+class OptimizerLoader:
+    def __init__(self):
+        self.optimizers_dict = {
+            'sgd': optim.SGD,
+            'adam': optim.Adam,
+            'rmsprop': optim.RMSprop,
+            'adagrad': optim.Adagrad
+        }
+        logging.info("OptimizerLoader initialized with optimizers: " + ", ".join(self.optimizers_dict.keys()))
+
+    def get_optimizer(self, optimizer_name, model_params, **kwargs):
+        if optimizer_name in self.optimizers_dict:
+            logging.info(f"Loading optimizer: {optimizer_name} with params: {kwargs}")
+            if optimizer_name == 'adam':
+                # Use 'momentum' value for the first beta coefficient if it's specified
+                betas = (kwargs.pop('momentum', 0.9), 0.999)
+                return self.optimizers_dict[optimizer_name](model_params, betas=betas, **kwargs)
+            else:
+                return self.optimizers_dict[optimizer_name](model_params, **kwargs)
+        else:
+            raise ValueError(f"Optimizer {optimizer_name} not recognized.")
+
+
+
+# regularization.py
+
+import torch
+import torch.nn as nn
+import logging
+
+class Regularization:
+    """
+    A class for applying various regularization techniques to a model.
+    """
+
+    @staticmethod
+    def apply_l2_regularization(model, lambda_l2, log_message=True):
+        """
+        Applies L2 regularization to the given model.
+
+        Args:
+            model (nn.Module): The model to apply L2 regularization to.
+            lambda_l2 (float): The regularization strength.
+
+        Returns:
+            torch.Tensor: The L2 regularization term to be added to the loss.
+        """
+        if log_message:
+            logging.info(f"Applying L2 regularization with strength: {lambda_l2}")
+        l2_reg = torch.tensor(0., device=next(model.parameters()).device)
+        for param in model.parameters():
+            if param.requires_grad:
+                l2_reg += torch.sum(param ** 2)
+        return lambda_l2 * l2_reg
+
+    @staticmethod
+    def apply_dropout(model, dropout_rate):
+        """
+        Applies dropout to the given model by updating the dropout rate.
+
+        Args:
+            model (nn.Module): The model to apply dropout to.
+            dropout_rate (float): The dropout rate.
+
+        Returns:
+            None
+        """
+        logging.info(f"Applying dropout with rate: {dropout_rate}")
+        for module in model.modules():
+            if isinstance(module, nn.Dropout):
+                module.p = dropout_rate
+
+    @staticmethod
+    def integrate_regularization(loss, l2_reg, log_message=True):
+        """
+        Integrates L2 regularization term into the loss.
+
+        Args:
+            loss (torch.Tensor): The original loss.
+            l2_reg (torch.Tensor): The L2 regularization term.
+
+        Returns:
+            torch.Tensor: The combined loss with L2 regularization.
+        """
+        if log_message:
+            logging.info(f"Integrating L2 regularization into the loss.")
+        return loss + l2_reg
+
+
+
+# dataset_loader.py
+
+import os
+import logging
+
+import numpy
+import numpy as np
+import pandas as pd
+from PIL import Image
+from torch.utils.data import Dataset
+from torchvision import datasets, transforms
+from torch.utils.data import random_split
+from torchvision.datasets import ImageFolder
+import nibabel as nib
+import types
+
+
+class DatasetLoader:
+
+    def __init__(self, dataset_name, data_dir='./dataset'):
+        self.dataset_name = dataset_name
+        self.data_dir = data_dir
+        self.datasets_dict = {
+            # 'mnist': self.load_mnist,
+            # 'med': self.load_med,
+            # 'miccai_brats2020': self.load_miccai_brats2020,
+            # 'ccts': self.load_ccts,
+            # 'tbcr': self.load_tbcr,
+            'scisic': self.load_scisic,
+
+            # Add more datasets here...
+        }
+        if self.dataset_name not in self.datasets_dict:
+            raise ValueError(f"Dataset {self.dataset_name} not recognized.")
+        logging.info(f"DatasetLoader initialized for {dataset_name}.")
+
+    @staticmethod
+    def get_all_datasets(data_dir='./dataset'):
+        return {
+            # 'mnist': DatasetLoader('mnist', data_dir),
+            # 'med': DatasetLoader('med', data_dir),
+            # 'miccai_brats2020': DatasetLoader('miccai_brats2020', data_dir),
+            # 'ccts': DatasetLoader('ccts', data_dir),
+            # 'tbcr': DatasetLoader('tbcr', data_dir),
+            'scisic': DatasetLoader('scisic', data_dir),
+        }
+
+    def load(self):
+        logging.info(f"Loading dataset: {self.dataset_name}.")
+        try:
+            train_dataset, val_dataset, test_dataset, _ = self.datasets_dict[self.dataset_name]()
+            return train_dataset, val_dataset, test_dataset
+        except KeyError:
+            raise ValueError(f"Dataset {self.dataset_name} not recognized.")
+
+    # Dataset #1: MNIST
+    def load_mnist(self):
+        train_dataset = datasets.MNIST(os.path.join(self.data_dir, 'mnist'), train=True, download=True)
+        test_dataset = datasets.MNIST(os.path.join(self.data_dir, 'mnist'), train=False, download=True)
+        train_dataset, val_dataset, _ = self.split_dataset(train_dataset)  # Adjusted unpacking
+        return train_dataset, test_dataset, val_dataset, train_dataset.classes
+
+    # Dataset #2: Med
+    def load_med(self):
+        train_dir = os.path.join(self.data_dir, 'med')
+        full_dataset = self.CustomImageDataset(train_dir)
+        train_dataset, val_dataset, test_dataset = self.split_dataset(full_dataset)
+        return train_dataset, test_dataset, val_dataset, train_dataset.classes
+
+    # Dataset #3: scisic
+    def load_scisic(self):
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor()
+        ])
+        train_dir = os.path.join(self.data_dir, 'scisic', 'Train')
+        test_dir = os.path.join(self.data_dir, 'scisic', 'Test')
+        # Load the full dataset for classes information
+        full_dataset = ImageFolder(train_dir, transform=transform)
+        classes = full_dataset.classes  # Get classes from the full dataset
+        # Load train dataset and split into train and validation
+        train_dataset = ImageFolder(train_dir, transform=transform)
+        train_dataset, val_dataset, _ = self.split_dataset(train_dataset)
+        # Load test dataset separately
+        test_dataset = ImageFolder(test_dir, transform=transform)
+        return train_dataset, val_dataset, test_dataset, classes
+
+    # Dataset #4: tbcr
+    def load_tbcr(self):
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor()
+        ])
+        train_dir = os.path.join(self.data_dir, 'tbcr')
+        full_dataset = ImageFolder(train_dir, transform=transform)
+        train_dataset, val_dataset, test_dataset = self.split_dataset(full_dataset)
+        return train_dataset, test_dataset, val_dataset, full_dataset.classes
+
+    # Dataset #5: ccts
+    def load_ccts(self):
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),  # Ensure this line is present
+            # Add other transformations as necessary
+        ])
+        train_dir = os.path.join(self.data_dir, 'ccts', 'train')
+        test_dir = os.path.join(self.data_dir, 'ccts', 'test')
+        valid_dir = os.path.join(self.data_dir, 'ccts', 'valid')
+        train_dataset = ImageFolder(train_dir, transform=transform)
+        test_dataset = ImageFolder(test_dir, transform=transform)
+        valid_dataset = ImageFolder(valid_dir, transform=transform)
+        return train_dataset, test_dataset, valid_dataset, train_dataset.classes
+
+    def load_miccai_brats2020(self):
+        train_dir = os.path.join(self.data_dir, 'miccai_brats2020', 'MICCAI_BraTS2020_TrainingData')
+        val_dir = os.path.join(self.data_dir, 'miccai_brats2020', 'MICCAI_BraTS2020_ValidationData')
+        name_mapping = os.path.join(train_dir, 'name_mapping.csv')
+        survival_info = os.path.join(train_dir, 'survival_info.csv')
+        name_mapping_val = os.path.join(val_dir, 'name_mapping_validation_data.csv')
+        survival_eval = os.path.join(val_dir, 'survival_evaluation.csv')
+
+        train_dataset = self.CustomImageDataset(train_dir, name_mapping, survival_info)
+        val_dataset = self.CustomImageDataset(val_dir, name_mapping_val, survival_eval, validation=True)
+
+        # Check if val_dataset and test_dataset exist
+        if val_dataset.__len__() > 0:
+            train_dataset = train_dataset + val_dataset
+            return train_dataset, None, None, None
+
+        train_dataset, val_split_dataset, test_dataset = self.split_dataset(train_dataset)
+        return train_dataset, val_split_dataset, test_dataset, None
+
+    @staticmethod
+    def split_dataset(dataset):
+        if dataset is None:
+            return None, None, None
+
+        if isinstance(dataset, tuple):
+            train_dataset = dataset[0]
+            val_dataset = dataset[1]
+            test_dataset = dataset[2]
+        else:
+            train_size = int(0.7 * len(dataset))  # 70% of the dataset for training
+            val_size = int(0.15 * len(dataset))  # 15% of the dataset for validation
+            test_size = len(dataset) - train_size - val_size  # Remaining for testing
+
+            train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
+
+        return train_dataset, val_dataset, test_dataset
+
+    def get_input_channels(self):
+        loaded_datasets = self.load()  # Renamed variable
+        train_dataset = loaded_datasets[0]
+        sample_img, _ = train_dataset[0]
+        return sample_img.shape[0]
+
+    def print_class_counts(self):
+        logging.info("Calling print_class_counts method")
+        train_dir = os.path.join(self.data_dir, self.dataset_name, 'Train')
+        if not os.path.exists(train_dir):
+            data_dir = os.path.join(self.data_dir, self.dataset_name)
+        else:
+            data_dir = train_dir
+        dataset = ImageFolder(data_dir)
+        class_counts = [0] * len(dataset.classes)
+        for _, label in dataset:
+            class_counts[label] += 1
+        logging.info(f"All classes: {dataset.classes}")
+        logging.info(f"All class counts: {class_counts}")
+
+    class CustomImageDataset(Dataset):
+        def __init__(self, root_dir, name_mapping_file, survival_info_file, transform=None, validation=False):
+            self.root_dir = root_dir
+            self.transform = transform
+            self.image_paths = []
+            self.labels = []
+            self.load_data(root_dir, name_mapping_file, survival_info_file, validation)
+
+        def load_data(self, root_dir, name_mapping_file, survival_info_file, validation):
+            name_mapping = pd.read_csv(name_mapping_file)
+            survival_info = pd.read_csv(survival_info_file)
+
+            for _, row in name_mapping.iterrows():
+                subject_id = row['BraTS_2020_subject_ID']
+                subject_dir = os.path.join(root_dir, str(subject_id))
+                for file in os.listdir(subject_dir):
+                    if file.endswith('.nii'):
+                        self.image_paths.append(os.path.join(subject_dir, file))
+                        if 'seg' in file:
+                            self.labels.append(subject_id)
+
+        def __len__(self):
+            return len(self.image_paths)
+
+        def __getitem__(self, idx):
+            image_path = self.image_paths[idx]
+            image = nib.load(image_path).get_fdata()
+            image = np.expand_dims(image, axis=0)
+            label = self.labels[idx]
+            if self.transform:
+                image = self.transform(image)
+            return image, label
+
+
+
+
+# preprocess.py
+
+import logging
+import os
+import torch
+from torchvision import transforms
+from loader.dataset_loader import DatasetLoader
+from torch.utils.data import DataLoader
+from PIL import Image, ImageFilter
+import matplotlib.pyplot as plt
+import numpy as np
+import cv2
+from collections import Counter
+
+
+class Preprocessor:
+    def __init__(self, model_type, dataset_name, task_name, data_dir='./dataset', hyperparams=None):
+        self.model_type = model_type
+        self.dataset_name = dataset_name
+        self.task_name = task_name
+        self.data_dir = data_dir
+        self.hyperparams = hyperparams or {}
+        logging.info(f"Preprocessor initialized with model type {model_type}.")
+
+    def wrap_datasets_in_dataloaders(self, train_dataset, val_dataset=None, test_dataset=None, shuffle=True):
+        batch_size = self.hyperparams['batch_size']
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False) if val_dataset is not None else None
+        test_loader = DataLoader(test_dataset, batch_size=batch_size,
+                                 shuffle=False) if test_dataset is not None else None
+        return train_loader, val_loader, test_loader
+
+    def preprocess(self, train_dataset, val_dataset=None, test_dataset=None, input_channels=None):
+        logging.info(f"Preprocessing data for {self.model_type} model with {input_channels} input channels.")
+        self.summarize_dataset(train_dataset, val_dataset, test_dataset)
+        transform = self.get_transforms(input_channels, train_dataset)
+        if train_dataset is not None:
+            train_dataset.transform = transform
+        if val_dataset is not None:
+            val_dataset.transform = transform
+        if test_dataset is not None:
+            test_dataset.transform = transform
+        train_dataset = self.verify_labels(train_dataset)
+        if val_dataset is not None:
+            val_dataset = self.verify_labels(val_dataset)
+        if test_dataset is not None:
+            test_dataset = self.verify_labels(test_dataset)
+        return train_dataset, val_dataset, test_dataset
+
+    def get_transforms(self, input_channels, train_dataset=None):
+        pil_transform_list = [
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(10),
+            transforms.RandomResizedCrop(224),
+            self.de_texturize_transform(),
+            self.de_colorize_transform(),
+            self.edge_enhance_transform(),
+        ]
+        to_tensor_transform = transforms.ToTensor()
+        tensor_transform_list = [
+            self.salient_edge_map_transform(),
+        ]
+        all_transforms = pil_transform_list + [to_tensor_transform] + tensor_transform_list
+        if input_channels is not None:
+            self.add_grayscale_transform(all_transforms, input_channels, train_dataset)
+            self.add_normalization_transform(all_transforms, input_channels)
+        return transforms.Compose(all_transforms)
+
+    @staticmethod
+    def de_texturize_transform():
+        return transforms.Lambda(lambda img: img.filter(ImageFilter.GaussianBlur(radius=2)))
+
+    @staticmethod
+    def de_colorize_transform():
+        return transforms.Grayscale(num_output_channels=1)
+
+    @staticmethod
+    def edge_enhance_transform():
+        return transforms.Lambda(lambda img: img.filter(ImageFilter.EDGE_ENHANCE))
+
+    @staticmethod
+    def salient_edge_map_transform():
+        def edge_detection(tensor_img):
+            if tensor_img.shape[0] == 3:
+                img = tensor_img.numpy().transpose(1, 2, 0).astype(np.uint8)
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            else:
+                img = tensor_img.numpy().squeeze(0).astype(np.uint8)
+            edges = cv2.Canny(img, 100, 200)
+            edges = np.stack([edges, edges, edges], axis=0)
+            return torch.tensor(edges, dtype=torch.float32) / 255.0
+
+        return transforms.Lambda(edge_detection)
+
+    def add_grayscale_transform(self, transform_list, input_channels, train_dataset=None):
+        if input_channels == 3 and train_dataset is not None and hasattr(train_dataset, 'classes') and \
+                train_dataset.classes[0] == '0':
+            transform_list.insert(1, transforms.Grayscale(num_output_channels=3))
+
+    def add_normalization_transform(self, transform_list, input_channels):
+        if input_channels == 1:
+            transform_list.append(transforms.Normalize((0.1307,), (0.3081,)))
+        else:
+            transform_list.append(transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)))
+
+    @staticmethod
+    def verify_labels(dataset):
+        label_counts = Counter()
+        for _, label in dataset:
+            label_counts[label] += 1
+        majority_label = label_counts.most_common(1)[0][0]
+        corrected_labels = [majority_label if label != majority_label else label for _, label in dataset]
+        dataset.labels = corrected_labels
+        return dataset
+
+    def summarize_dataset(self, train_dataset, val_dataset=None, test_dataset=None):
+        logging.info(f"Summarizing dataset: {self.dataset_name}")
+        logging.info(f"Number of training samples: {len(train_dataset)}")
+        if val_dataset is not None:
+            logging.info(f"Number of validation samples: {len(val_dataset)}")
+        if test_dataset is not None:
+            logging.info(f"Number of test samples: {len(test_dataset)}")
+        self.print_class_counts(train_dataset)
+        self.calculate_basic_statistics(train_dataset)
+        self.visualize_samples(self.model_type, train_dataset)
+
+    @staticmethod
+    def print_class_counts(dataset):
+        logging.info("Calculating class counts")
+        # Handle if the dataset is a Subset
+        if isinstance(dataset, torch.utils.data.Subset):
+            original_dataset = dataset.dataset
+        else:
+            original_dataset = dataset
+        # Check if the 'classes' attribute exists
+        if hasattr(original_dataset, 'classes'):
+            classes = original_dataset.classes
+        else:
+            logging.warning("The dataset does not have a 'classes' attribute.")
+            # Handle the case where 'classes' does not exist, e.g., by inferring classes or skipping
+            return
+        indices = dataset.indices if isinstance(dataset, torch.utils.data.Subset) else range(len(original_dataset))
+        # Initialize the class counts
+        class_counts = [0] * len(classes)
+        # Count the occurrences of each class in the subset
+        for idx in indices:
+            _, label = original_dataset[idx]
+            class_counts[label] += 1
+        logging.info(f"Classes: {classes}")
+        logging.info(f"Class counts: {class_counts}")
+
+    @staticmethod
+    def calculate_basic_statistics(dataset):
+        data_list = []
+        for data, _ in dataset:
+            data_list.append(data.numpy())
+        data_array = np.array(data_list)
+        mean = np.mean(data_array, axis=0)
+        median = np.median(data_array, axis=0)
+        std_dev = np.std(data_array, axis=0)
+        global_mean = np.mean(mean)
+        global_median = np.mean(median)
+        global_std_dev = np.mean(std_dev)
+        logging.info(
+            f"Global Mean: {global_mean}, Global Median: {global_median}, Global Standard Deviation: {global_std_dev}")
+
+    def visualize_samples(self, model_name, dataset, num_samples=5):
+        output_dir = os.path.join('out', self.task_name, self.dataset_name, 'pre_visualization')
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Accumulate all samples and labels
+        sample_images = []
+        sample_labels = []
+        for i in range(num_samples):
+            img, label = dataset[i]
+            if isinstance(img, torch.Tensor):
+                img = img.permute(1, 2, 0).numpy()  # Convert tensor to numpy array
+            if img.shape[2] == 1:  # Grayscale image
+                img = img.squeeze()
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)  # Convert grayscale to RGB
+            sample_images.append(img)
+            sample_labels.append(label)
+
+        # Create a single figure for visualization
+        fig, axs = plt.subplots(1, num_samples, figsize=(15, 3))
+        for i in range(num_samples):
+            axs[i].imshow(sample_images[i])
+            axs[i].set_title(f'Model: {model_name} | Label: {sample_labels[i]}')
+            axs[i].axis('off')
+
+        # Save the complete visualization
+        output_path = os.path.join(output_dir, f'sample_visualization_model_{model_name}.png')
+        plt.savefig(output_path)
+        logging.info(f'Complete sample visualization saved to {output_path}')
+        plt.close(fig)
+
+
+import logging
+import os
+
+import torch
+from model.alexnet_model import AlexNetModel
+from model.resnet_model import ResNet18, ResNet34, ResNet50, ResNet101, ResNet152
+from model.densenet_model import DenseNet121, DenseNet169, DenseNet201, DenseNet264
+from model.resnext_model import ResNeXt50, ResNeXt101, ResNeXt152
+from model.mobilenet_model import MobileNetV2Model, MobileNetV3SmallModel
+from model.hybrid_models import HybridResNetDenseNet
+from model.transformer_model import TransformerModel
+from model.conditional_diffusion_model import ConditionalDiffusionModel
+
+class ModelLoader:
+    def __init__(self, device):
+        self.device = device
+        self.models_dict = {
+            # 'alexnet': AlexNetModel,
+            # 'resnet18': ResNet18,
+            # 'resnet34': ResNet34,
+            'resnet50': ResNet50,
+            # 'resnet101': ResNet101,
+            # 'resnet152': ResNet152,
+            # 'transformer': TransformerModel,
+            # 'conditional_diffusion': ConditionalDiffusionModel,
+            'densenet121': DenseNet121,
+            # 'densenet169': DenseNet169,
+            # 'densenet201': DenseNet201,
+            # 'densenet264': DenseNet264,
+            # 'resnext50': ResNeXt50,
+            # 'resnext101': ResNeXt101,
+            # 'resnext152': ResNeXt152,
+            # 'mobilenet_v2': MobileNetV2Model,
+            # 'mobilenet_v3_small': MobileNetV3SmallModel,
+            # 'hybrid_resnet_densenet': HybridResNetDenseNet,
+        }
+        logging.info("ModelLoader initialized with models: " + ", ".join(self.models_dict.keys()))
+
+    def get_model(self, model_name, input_channels=3, pretrained=False):
+        logging.info(f"Getting model {model_name} with {input_channels} input channels.")
+        if model_name in self.models_dict:
+            model_class = self.models_dict[model_name]
+            if model_name.startswith('resnet') or model_name.startswith('densenet') or model_name.startswith('resnext'):
+                model = model_class(pretrained=pretrained, input_channels=input_channels)
+            elif model_name.startswith('mobilenet'):
+                model = model_class(pretrained=pretrained, input_channels=input_channels)
+            elif model_name == 'hybrid_resnet_densenet':
+                model = model_class(num_blocks_resnet=[3, 4, 6, 3], num_blocks_densenet=[6, 12, 32, 32], pretrained_resnet=pretrained, pretrained_densenet=pretrained, input_channels=input_channels)
+            else:
+                model = model_class(input_channels=input_channels)
+
+            if torch.cuda.is_available():
+                model = model.to(self.device)
+            return model
+        else:
+            raise ValueError(f"Model {model_name} not recognized.")
+
+    def load_pretrained_model(self, model_name, load_task, dataset_name):
+        model_class = self.models_dict.get(model_name)
+        if model_class is None:
+            raise ValueError(f"Model {model_name} not found.")
+        model = model_class()  # Initialize the model
+        model = model.to(self.device)  # Move the model to the appropriate device
+
+        # Load the state dict from a file
+        model_path = f"out/{load_task}/{dataset_name}/save_model/best_{model_name}_{load_task}.pth"
+        if os.path.isfile(model_path):
+            model.load_state_dict(torch.load(model_path))
+        else:
+            raise ValueError(f"No saved model found at {model_path}")
+
+        return model
+
+
+
+# alexnet_model.py
+
+import torch
+import torch.nn as nn
+import torchvision.models as models
+import logging
+
+class AlexNetModel(nn.Module):
+    def __init__(self, input_channels=3, pretrained=False):
+        logging.info(f"Initializing AlexNetModel with {input_channels} input channels.")
+        super(AlexNetModel, self).__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(input_channels, 64, kernel_size=11, stride=4, padding=2),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+            nn.Conv2d(64, 192, kernel_size=5, padding=2),
+            nn.BatchNorm2d(192),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+            nn.Conv2d(192, 384, kernel_size=3, padding=1),
+            nn.BatchNorm2d(384),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(384, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=3, stride=2),
+        )
+        self.classifier = nn.Sequential(
+            nn.Dropout(),
+            nn.Linear(256 * 6 * 6, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(),
+            nn.Linear(4096, 4096),
+            nn.ReLU(inplace=True),
+            nn.Linear(4096, 10),
+        )
+
+        if pretrained:
+            self.load_pretrained_weights()
+
+    def forward(self, x):
+        x = self.features(x)
+        x = x.view(x.size(0), 256 * 6 * 6)
+        x = self.classifier(x)
+        return x
+
+    def load_pretrained_weights(self):
+        # Load pretrained weights from torchvision models
+        pretrained_model = models.alexnet(pretrained=True)
+
+        # Transfer weights from pretrained model to self
+        self.features.load_state_dict(pretrained_model.features.state_dict())
+        self.classifier.load_state_dict(pretrained_model.classifier.state_dict())
+
+
+
+
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import logging
+
+class Swish(nn.Module):
+    def forward(self, x):
+        return x * torch.sigmoid(x)
+
+class SEBlock(nn.Module):
+    def __init__(self, in_channels, reduction=4):
+        super(SEBlock, self).__init__()
+        self.global_avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Conv2d(in_channels, in_channels // reduction, kernel_size=1)
+        self.fc2 = nn.Conv2d(in_channels // reduction, in_channels, kernel_size=1)
+        self.swish = Swish()
+
+    def forward(self, x):
+        batch, channel, _, _ = x.size()
+        se = self.global_avg_pool(x)
+        se = self.fc1(se)
+        se = self.swish(se)
+        se = self.fc2(se)
+        se = torch.sigmoid(se)
+        return x * se
+
+class MBConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, expand_ratio, stride, kernel_size, reduction=4, drop_connect_rate=0.2):
+        super(MBConvBlock, self).__init__()
+        self.drop_connect_rate = drop_connect_rate
+        self.expand_ratio = expand_ratio
+        self.stride = stride
+
+        mid_channels = in_channels * expand_ratio
+
+        self.expand_conv = nn.Conv2d(in_channels, mid_channels, kernel_size=1, bias=False) if expand_ratio != 1 else None
+        self.expand_bn = nn.BatchNorm2d(mid_channels) if expand_ratio != 1 else None
+
+        self.dwconv = nn.Conv2d(mid_channels, mid_channels, kernel_size=kernel_size, stride=stride, padding=kernel_size // 2, groups=mid_channels, bias=False)
+        self.dw_bn = nn.BatchNorm2d(mid_channels)
+
+        self.se = SEBlock(mid_channels, reduction=reduction)
+        self.project_conv = nn.Conv2d(mid_channels, out_channels, kernel_size=1, bias=False)
+        self.project_bn = nn.BatchNorm2d(out_channels)
+
+        self.swish = Swish()
+
+    def forward(self, x):
+        identity = x
+        if self.expand_conv:
+            x = self.swish(self.expand_bn(self.expand_conv(x)))
+        x = self.swish(self.dw_bn(self.dwconv(x)))
+        x = self.se(x)
+        x = self.project_bn(self.project_conv(x))
+
+        if self.stride == 1 and identity.size() == x.size():
+            if self.drop_connect_rate:
+                x = self.drop_connect(x)
+            x += identity
+        return x
+
+    def drop_connect(self, x):
+        if not self.training:
+            return x
+        keep_prob = 1 - self.drop_connect_rate
+        random_tensor = keep_prob + torch.rand(x.size(0), 1, 1, 1, device=x.device)
+        random_tensor.floor_()
+        return x / keep_prob * random_tensor
+
+class EfficientNet(nn.Module):
+    def __init__(self, width_coefficient, depth_coefficient, dropout_rate=0.2, num_classes=1000):
+        super(EfficientNet, self).__init__()
+
+        def round_filters(filters, width_coefficient):
+            multiplier = width_coefficient
+            divisor = 8
+            min_depth = filters
+            new_filters = max(min_depth, int(filters * multiplier + divisor / 2) // divisor * divisor)
+            if new_filters < 0.9 * filters:
+                new_filters += divisor
+            return int(new_filters)
+
+        def round_repeats(repeats, depth_coefficient):
+            return int(depth_coefficient * repeats)
+
+        base_channels = 32
+        base_layers = [
+            (1, 16, 1, 3, 1),
+            (6, 24, 2, 3, 2),
+            (6, 40, 2, 5, 2),
+            (6, 80, 3, 3, 2),
+            (6, 112, 3, 5, 1),
+            (6, 192, 4, 5, 2),
+            (6, 320, 1, 3, 1),
+        ]
+
+        self.out_channels = round_filters(base_channels, width_coefficient)
+        self.stem_conv = nn.Conv2d(3, self.out_channels, kernel_size=3, stride=2, padding=1, bias=False)
+        self.stem_bn = nn.BatchNorm2d(self.out_channels)
+        self.swish = Swish()
+
+        self.blocks = nn.ModuleList()
+        in_channels = self.out_channels
+        for t, c, n, k, s in base_layers:
+            out_channels = round_filters(c, width_coefficient)
+            repeats = round_repeats(n, depth_coefficient)
+            for i in range(repeats):
+                stride = s if i == 0 else 1
+                self.blocks.append(MBConvBlock(in_channels, out_channels, t, stride, k))
+                in_channels = out_channels
+
+        self.out_channels = round_filters(1280, width_coefficient)
+        self.head_conv = nn.Conv2d(in_channels, self.out_channels, kernel_size=1, bias=False)
+        self.head_bn = nn.BatchNorm2d(self.out_channels)
+
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.dropout = nn.Dropout(p=dropout_rate)
+        self.fc = nn.Linear(self.out_channels, num_classes)
+
+        self._initialize_weights()
+
+    def forward(self, x):
+        logging.info(f"Input shape: {x.shape}")
+        x = self.swish(self.stem_bn(self.stem_conv(x)))
+        logging.info(f"Shape after stem layers: {x.shape}")
+        for i, block in enumerate(self.blocks):
+            x = block(x)
+            logging.info(f"Shape after block {i + 1}: {x.shape}")
+        x = self.swish(self.head_bn(self.head_conv(x)))
+        logging.info(f"Shape after head layers: {x.shape}")
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        x = self.dropout(x)
+        x = self.fc(x)
+        return x
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                nn.init.constant_(m.bias, 0)
+
+def EfficientNetB0(num_classes=1000):
+    return EfficientNet(width_coefficient=1.0, depth_coefficient=1.0, dropout_rate=0.2, num_classes=num_classes)
+
+def EfficientNetB1(num_classes=1000):
+    return EfficientNet(width_coefficient=1.0, depth_coefficient=1.1, dropout_rate=0.2, num_classes=num_classes)
+
+def EfficientNetB2(num_classes=1000):
+    return EfficientNet(width_coefficient=1.1, depth_coefficient=1.2, dropout_rate=0.3, num_classes=num_classes)
+
+def EfficientNetB3(num_classes=1000):
+    return EfficientNet(width_coefficient=1.2, depth_coefficient=1.4, dropout_rate=0.3, num_classes=num_classes)
+
+def EfficientNetB4(num_classes=1000):
+    return EfficientNet(width_coefficient=1.4, depth_coefficient=1.8, dropout_rate=0.4, num_classes=num_classes)
+
+def EfficientNetB5(num_classes=1000):
+    return EfficientNet(width_coefficient=1.6, depth_coefficient=2.2, dropout_rate=0.4, num_classes=num_classes)
+
+def EfficientNetB6(num_classes=1000):
+    return EfficientNet(width_coefficient=1.8, depth_coefficient=2.6, dropout_rate=0.5, num_classes=num_classes)
+
+def EfficientNetB7(num_classes=1000):
+    return EfficientNet(width_coefficient=2.0, depth_coefficient=3.1, dropout_rate=0.5, num_classes=num_classes)
+
+
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torchvision.models as models
+import logging
+from torchvision.models import mobilenet_v2, mobilenet_v3_small
+
+
+class ConvBNReLU(nn.Sequential):
+    def __init__(self, in_channels, out_channels, kernel_size=3, stride=1, groups=1):
+        padding = (kernel_size - 1) // 2
+        super(ConvBNReLU, self).__init__(
+            nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, groups=groups, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU6(inplace=True)
+        )
+
+
+class InvertedResidual(nn.Module):
+    def __init__(self, in_channels, out_channels, stride, expand_ratio):
+        super(InvertedResidual, self).__init__()
+        hidden_dim = int(round(in_channels * expand_ratio))
+        self.use_res_connect = stride == 1 and in_channels == out_channels
+
+        layers = []
+        if expand_ratio != 1:
+            layers.append(ConvBNReLU(in_channels, hidden_dim, kernel_size=1))
+        layers.extend([
+            ConvBNReLU(hidden_dim, hidden_dim, stride=stride, groups=hidden_dim),
+            nn.Conv2d(hidden_dim, out_channels, 1, 1, 0, bias=False),
+            nn.BatchNorm2d(out_channels),
+        ])
+        self.conv = nn.Sequential(*layers)
+
+    def forward(self, x):
+        if self.use_res_connect:
+            return x + self.conv(x)
+        else:
+            return self.conv(x)
+
+
+class MobileNetV2(nn.Module):
+    def __init__(self, num_classes=1000, width_mult=1.0, inverted_residual_setting=None, round_nearest=8, input_channels=3):
+        super(MobileNetV2, self).__init__()
+        block = InvertedResidual
+        input_channel = 32
+        last_channel = 1280
+
+        if inverted_residual_setting is None:
+            inverted_residual_setting = [
+                # t, c, n, s
+                [1, 16, 1, 1],
+                [6, 24, 2, 2],
+                [6, 32, 3, 2],
+                [6, 64, 4, 2],
+                [6, 96, 3, 1],
+                [6, 160, 3, 2],
+                [6, 320, 1, 1],
+            ]
+
+        # building first layer
+        input_channel = int(input_channel * width_mult)
+        self.last_channel = int(last_channel * max(1.0, width_mult))
+        features = [ConvBNReLU(input_channels, input_channel, stride=2)]
+
+        # building inverted residual blocks
+        for t, c, n, s in inverted_residual_setting:
+            output_channel = int(c * width_mult)
+            for i in range(n):
+                stride = s if i == 0 else 1
+                features.append(block(input_channel, output_channel, stride, expand_ratio=t))
+                input_channel = output_channel
+
+        # building last several layers
+        features.append(ConvBNReLU(input_channel, self.last_channel, kernel_size=1))
+
+        # make it nn.Sequential
+        self.features = nn.Sequential(*features)
+
+        # building classifier
+        self.classifier = nn.Sequential(
+            nn.Dropout(0.2),
+            nn.Linear(self.last_channel, num_classes),
+        )
+
+        # weight initialization
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                nn.init.zeros_(m.bias)
+
+    def forward(self, x):
+        x = self.features(x)
+        x = x.mean([2, 3])  # global average pooling
+        x = self.classifier(x)
+        return x
+
+
+def MobileNetV2Model(pretrained=False, input_channels=3):
+    model = MobileNetV2(input_channels=input_channels)
+    if pretrained:
+        pretrained_model = mobilenet_v2(pretrained=True)
+        model_dict = model.state_dict()
+        pretrained_dict = {k: v for k, v in pretrained_model.state_dict().items() if k in model_dict}
+        model_dict.update(pretrained_dict)
+        model.load_state_dict(model_dict)
+    return model
+
+
+
+class hswish(nn.Module):
+    def __init__(self, inplace=True):
+        super(hswish, self).__init__()
+        self.relu = nn.ReLU6(inplace=inplace)
+
+    def forward(self, x):
+        return x * self.relu(x + 3) / 6
+
+
+class hsigmoid(nn.Module):
+    def __init__(self, inplace=True):
+        super(hsigmoid, self).__init__()
+        self.relu = nn.ReLU6(inplace=inplace)
+
+    def forward(self, x):
+        return self.relu(x + 3) / 6
+
+
+class SqueezeExcitation(nn.Module):
+    def __init__(self, inplanes, se_planes):
+        super(SqueezeExcitation, self).__init__()
+        self.reduce_expand = nn.Sequential(
+            nn.Conv2d(inplanes, se_planes, 1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(se_planes, inplanes, 1),
+            hsigmoid()
+        )
+
+    def forward(self, x):
+        x_se = torch.mean(x, dim=(-2, -1), keepdim=True)
+        return x * self.reduce_expand(x_se)
+
+
+class ConvBNActivation(nn.Sequential):
+    def __init__(self, in_planes, out_planes, kernel_size, stride, groups=1):
+        padding = (kernel_size - 1) // 2
+        super(ConvBNActivation, self).__init__(
+            nn.Conv2d(in_planes, out_planes, kernel_size, stride, padding, groups=groups, bias=False),
+            nn.BatchNorm2d(out_planes),
+            hswish()
+        )
+
+
+class InvertedResidualConfig:
+    def __init__(self, inplanes, outplanes, kernel_size, stride, expand_ratio, se_planes):
+        self.inplanes = inplanes
+        self.outplanes = outplanes
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.expand_ratio = expand_ratio
+        self.se_planes = se_planes
+
+
+class InvertedResidual(nn.Module):
+    def __init__(self, cnf):
+        super(InvertedResidual, self).__init__()
+        hidden_dim = round(cnf.inplanes * cnf.expand_ratio)
+        self.use_res_connect = cnf.stride == 1 and cnf.inplanes == cnf.outplanes
+        layers = []
+        if cnf.expand_ratio != 1:
+            layers.append(ConvBNActivation(cnf.inplanes, hidden_dim, 1, 1))
+        layers.extend([
+            ConvBNActivation(hidden_dim, hidden_dim, cnf.kernel_size, cnf.stride, groups=hidden_dim),
+            SqueezeExcitation(hidden_dim, cnf.se_planes),
+            nn.Conv2d(hidden_dim, cnf.outplanes, 1, 1, 0, bias=False),
+            nn.BatchNorm2d(cnf.outplanes),
+        ])
+        self.conv = nn.Sequential(*layers)
+
+    def forward(self, x):
+        if self.use_res_connect:
+            return x + self.conv(x)
+        else:
+            return self.conv(x)
+
+
+class MobileNetV3(nn.Module):
+    def __init__(self, num_classes=1000, cfgs=None, input_channels=3):
+        super(MobileNetV3, self).__init__()
+        self.cfgs = cfgs
+        self.conv1 = ConvBNActivation(input_channels, 16, 3, 2)
+        self.layers = self._make_layers()
+        self.conv2 = ConvBNActivation(cfgs[-1].inplanes, 960, 1, 1)
+        self.pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.linear = nn.Linear(960, num_classes)
+
+    def _make_layers(self):
+        layers = []
+        for cfg in self.cfgs:
+            layers.append(InvertedResidual(cfg))
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.layers(x)
+        x = self.conv2(x)
+        x = self.pool(x)
+        x = x.view(x.size(0), -1)
+        x = self.linear(x)
+        return x
+
+
+def MobileNetV3SmallModel(pretrained=False, input_channels=3):
+    cfgs = [
+        InvertedResidualConfig(16, 16, 3, 2, 1, 4),
+        InvertedResidualConfig(16, 24, 3, 2, 2, 3),
+        InvertedResidualConfig(24, 24, 3, 1, 2.5, 3),
+        InvertedResidualConfig(24, 40, 5, 2, 2.5, 3),
+        InvertedResidualConfig(40, 40, 5, 1, 2.5, 3),
+        InvertedResidualConfig(40, 40, 5, 1, 2.5, 3),
+        InvertedResidualConfig(40, 48, 5, 1, 2.5, 3),
+        InvertedResidualConfig(48, 48, 5, 1, 2.5, 3),
+        InvertedResidualConfig(48, 96, 5, 2, 2.5, 3),
+        InvertedResidualConfig(96, 96, 5, 1, 2.5, 3),
+    ]
+    model = MobileNetV3(cfgs=cfgs, input_channels=input_channels)
+    if pretrained:
+        pretrained_model = mobilenet_v3_small(pretrained=True)
+        model_dict = model.state_dict()
+        pretrained_dict = {k: v for k, v in pretrained_model.state_dict().items() if k in model_dict}
+        model_dict.update(pretrained_dict)
+        model.load_state_dict(model_dict)
+    return model
+
+
+
+
+import torch
+import torch.nn as nn
+import torchvision.models as models
+import logging
+
+
+class ResidualBlock(nn.Module):
+    expansion = 1  # Adding the expansion attribute
+    logged = False
+
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.downsample = None
+        if stride != 1 or in_channels != out_channels:
+            self.downsample = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+
+    def forward(self, x):
+        if not self.logged and torch.cuda.current_device() == 0:  # Only log for the first GPU to reduce clutter
+            logging.info("Forward pass in ResidualBlock.")
+            self.logged = True  # Set this to True after the first log
+        residual = x
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        if self.downsample is not None:
+            residual = self.downsample(x)
+        out += residual
+        out = self.relu(out)
+        return out
+
+
+class ResNetModel(nn.Module):
+    def __init__(self, block, layers, num_classes=10, input_channels=3, pretrained=False):
+        super(ResNetModel, self).__init__()
+        self.in_channels = 64
+        self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self.make_layer(block, 64, layers[0], stride=1)
+        self.layer2 = self.make_layer(block, 128, layers[1], stride=2)
+        self.layer3 = self.make_layer(block, 256, layers[2], stride=2)
+        self.layer4 = self.make_layer(block, 512, layers[3], stride=2)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(512 * block.expansion, num_classes)
+
+        if pretrained:
+            self.load_pretrained_weights(input_channels)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return x
+
+    def make_layer(self, block, out_channels, blocks, stride=1):
+        layers = []
+        layers.append(block(self.in_channels, out_channels, stride))
+        self.in_channels = out_channels * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.in_channels, out_channels, 1))
+        return nn.Sequential(*layers)
+
+    def load_pretrained_weights(self, input_channels):
+        # Load pretrained weights from torchvision models
+        pretrained_model = models.resnet18(pretrained=True)
+
+        if input_channels == 3:
+            self.conv1.load_state_dict(pretrained_model.conv1.state_dict())
+        else:
+            # For non-standard input channels, initialize the weights of the first conv layer
+            nn.init.kaiming_normal_(self.conv1.weight, mode='fan_out', nonlinearity='relu')
+        self.bn1.load_state_dict(pretrained_model.bn1.state_dict())
+        self.layer1.load_state_dict(pretrained_model.layer1.state_dict())
+        self.layer2.load_state_dict(pretrained_model.layer2.state_dict())
+        self.layer3.load_state_dict(pretrained_model.layer3.state_dict())
+        self.layer4.load_state_dict(pretrained_model.layer4.state_dict())
+        self.fc.load_state_dict(pretrained_model.fc.state_dict())
+
+
+def ResNet18(pretrained=False, input_channels=3):
+    return ResNetModel(ResidualBlock, [2, 2, 2, 2], pretrained=pretrained, input_channels=input_channels)
+
+
+def ResNet34(pretrained=False, input_channels=3):
+    return ResNetModel(ResidualBlock, [3, 4, 6, 3], pretrained=pretrained, input_channels=input_channels)
+
+
+def ResNet50(pretrained=False, input_channels=3):
+    return ResNetModel(ResidualBlock, [3, 4, 6, 3], pretrained=pretrained, input_channels=input_channels)
+
+
+def ResNet101(pretrained=False, input_channels=3):
+    return ResNetModel(ResidualBlock, [3, 4, 23, 3], pretrained=pretrained, input_channels=input_channels)
+
+
+def ResNet152(pretrained=False, input_channels=3):
+    return ResNetModel(ResidualBlock, [3, 8, 36, 3], pretrained=pretrained, input_channels=input_channels)
+
+
+
+import torch
+import torch.nn as nn
+import torchvision.models as models
+import logging
+
+
+class ResidualBlock(nn.Module):
+    expansion = 1  # Adding the expansion attribute
+    logged = False
+
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.downsample = None
+        if stride != 1 or in_channels != out_channels:
+            self.downsample = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels)
+            )
+
+    def forward(self, x):
+        if not self.logged and torch.cuda.current_device() == 0:  # Only log for the first GPU to reduce clutter
+            logging.info("Forward pass in ResidualBlock.")
+            self.logged = True  # Set this to True after the first log
+        # logging.debug("Forward pass in ResidualBlock.")
+        residual = x
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out = self.bn2(out)
+        if self.downsample is not None:
+            residual = self.downsample(x)
+        out += residual
+        out = self.relu(out)
+        return out
+
+
+class ResNeXtBlock(nn.Module):
+    expansion = 2
+
+    def __init__(self, in_channels, out_channels, cardinality, stride=1):
+        super(ResNeXtBlock, self).__init__()
+        self.cardinality = cardinality
+        self.conv1 = nn.Conv2d(in_channels, out_channels * self.expansion, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels * self.expansion)
+        self.conv2 = nn.Conv2d(out_channels * self.expansion, out_channels * self.expansion,
+                               kernel_size=3, stride=stride, padding=1, groups=self.cardinality, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels * self.expansion)
+        self.conv3 = nn.Conv2d(out_channels * self.expansion, out_channels * self.expansion, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(out_channels * self.expansion)
+        self.relu = nn.ReLU(inplace=True)
+        self.downsample = None
+        if stride != 1 or in_channels != out_channels * self.expansion:
+            self.downsample = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels * self.expansion, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(out_channels * self.expansion)
+            )
+
+    def forward(self, x):
+        residual = x
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+        out = self.relu(out)
+
+        out = self.conv3(out)
+        out = self.bn3(out)
+
+        if self.downsample is not None:
+            residual = self.downsample(x)
+
+        out += residual
+        out = self.relu(out)
+        return out
+
+
+class ResNeXtModel(nn.Module):
+    def __init__(self, block, layers, cardinality, num_classes=1000, input_channels=3, pretrained=False):
+        super(ResNeXtModel, self).__init__()
+        self.in_channels = 64
+        self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self.make_layer(block, 64, layers[0], cardinality, stride=1)
+        self.layer2 = self.make_layer(block, 128, layers[1], cardinality, stride=2)
+        self.layer3 = self.make_layer(block, 256, layers[2], cardinality, stride=2)
+        self.layer4 = self.make_layer(block, 512, layers[3], cardinality, stride=2)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(512 * block.expansion, num_classes)
+
+        if pretrained:
+            self.load_pretrained_weights(input_channels)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return x
+
+    def make_layer(self, block, out_channels, blocks, cardinality, stride=1):
+        layers = []
+        layers.append(block(self.in_channels, out_channels, cardinality, stride))
+        self.in_channels = out_channels * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.in_channels, out_channels, cardinality, 1))
+        return nn.Sequential(*layers)
+
+    def load_pretrained_weights(self, input_channels):
+        # Load pretrained weights from torchvision models
+        pretrained_model = models.resnext50_32x4d(pretrained=True)
+
+        if input_channels == 3:
+            self.conv1.load_state_dict(pretrained_model.conv1.state_dict())
+        else:
+            # For non-standard input channels, initialize the weights of the first conv layer
+            nn.init.kaiming_normal_(self.conv1.weight, mode='fan_out', nonlinearity='relu')
+        self.bn1.load_state_dict(pretrained_model.bn1.state_dict())
+        self.layer1.load_state_dict(pretrained_model.layer1.state_dict())
+        self.layer2.load_state_dict(pretrained_model.layer2.state_dict())
+        self.layer3.load_state_dict(pretrained_model.layer3.state_dict())
+        self.layer4.load_state_dict(pretrained_model.layer4.state_dict())
+        self.fc.load_state_dict(pretrained_model.fc.state_dict())
+
+
+def ResNeXt50(cardinality=32, num_classes=1000, input_channels=3, pretrained=False):
+    return ResNeXtModel(ResNeXtBlock, [3, 4, 6, 3], cardinality, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained)
+
+
+def ResNeXt101(cardinality=32, num_classes=1000, input_channels=3, pretrained=False):
+    return ResNeXtModel(ResNeXtBlock, [3, 4, 23, 3], cardinality, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained)
+
+
+def ResNeXt152(cardinality=32, num_classes=1000, input_channels=3, pretrained=False):
+    return ResNeXtModel(ResNeXtBlock, [3, 8, 36, 3], cardinality, num_classes=num_classes, input_channels=input_channels, pretrained=pretrained)
+
+
+
+
+
+# visualization.py
+
+from .attack.adversarial_examples import save_adversarial_examples
+from .attack.perturbation_visualization import save_perturbation_visualization
+from .train.confusion_matrix import save_confusion_matrix
+from .train.precision_recall_curve import save_precision_recall_curve
+from .defense.robustness_evaluation import robustness_evaluation
+from .defense.perturbation_analysis import perturbation_analysis
+from .train.training_validation_loss_accuracy import load_and_visualize_training_results
+import matplotlib.pyplot as plt
+import os
+
+class Visualization:
+    def __init__(self):
+        pass
+
+    def visualize_normal(self, models, data, task_name, dataset_name, class_names):
+        true_labels_dict = {}
+        predictions_dict = {}
+        # Check the length of data to adapt to the presence or absence of history
+        if len(data) == 3:
+            true_labels_dict, predictions_dict, history = data
+            # Proceed with visualization that requires history
+            load_and_visualize_training_results(task_name, dataset_name)
+        elif len(data) == 2:
+            true_labels_dict, predictions_dict = data
+
+        # Visualization that does not require history
+        save_confusion_matrix(models, true_labels_dict, predictions_dict, task_name, dataset_name, class_names)
+        save_precision_recall_curve(models, true_labels_dict, predictions_dict, class_names, task_name, dataset_name)
+
+    def visualize_attack(self, adv_examples, model_names, task_name, dataset_name, attack_name):
+        save_adversarial_examples(adv_examples, model_names, task_name, dataset_name, attack_name)
+        save_perturbation_visualization(adv_examples, model_names, task_name, dataset_name)
+
+    def visualize_defense(self, data, task_name, dataset_name):
+        os.makedirs(os.path.join('out', task_name, dataset_name, 'visualization'), exist_ok=True)
+
+        plt.figure()
+        robustness_evaluation(data)
+        plt.savefig(os.path.join('out', task_name, dataset_name, 'visualization', 'robustness_evaluation.png'))
+        plt.close()  # Close the figure after saving
+
+        plt.figure()
+        perturbation_analysis(data)
+        plt.savefig(os.path.join('out', task_name, dataset_name, 'visualization', 'perturbation_analysis.png'))
+        plt.close()
+
+
+
+# normal_visual.py
+
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.metrics import (
+    confusion_matrix, precision_recall_curve,
+    ConfusionMatrixDisplay
+)
+from sklearn.preprocessing import label_binarize
+from collections.abc import Iterable
+
+def flatten_list(input_list):
+    if isinstance(input_list, Iterable) and not isinstance(input_list, (str, bytes, np.ndarray)):
+        return [item for sublist in input_list for item in sublist]
+    else:
+        return [input_list] if not isinstance(input_list, list) else input_list
+
+# Ensure ensure_numpy_array handles numpy.int64 correctly
+def ensure_numpy_array(input_data):
+    if isinstance(input_data, list):
+        return np.array(input_data)
+    elif isinstance(input_data, np.ndarray):
+        return input_data
+    else:
+        return np.array([input_data])
+
+# Plotting and saving confusion matrix
+def plot_confusion_matrix(true_labels, predictions, model_name, class_labels):
+    class_labels = flatten_list(class_labels)
+    true_labels = flatten_list(true_labels)
+    predictions = flatten_list(predictions)
+
+    true_labels = ensure_numpy_array(true_labels)
+    predictions = ensure_numpy_array(predictions)
+
+    cm = confusion_matrix(true_labels, predictions, labels=class_labels)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_labels)
+
+    fig, ax = plt.subplots(figsize=(10, 10))
+    disp.plot(ax=ax, cmap='viridis')
+    plt.title(f'Confusion Matrix for {model_name}')
+    plt.xticks(rotation=90)
+    plt.tight_layout()
+    return fig
+
+def save_confusion_matrix(true_labels, predictions, model_name, class_labels, task_name, dataset_name):
+    fig = plot_confusion_matrix(true_labels, predictions, model_name, class_labels)
+    output_path = f'out/{task_name}/{dataset_name}/confusion_matrix_{model_name}.png'
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    print(f'Confusion matrix saved to {output_path}')
+
+# Plotting and saving precision-recall curve
+def plot_precision_recall_curve(models, true_labels, predictions, class_names):
+    n_classes = len(class_names)
+    fig, ax = plt.subplots()
+
+    for model_name in models:
+        true_labels_model = np.array(true_labels[model_name])
+        predictions_model = np.array(predictions[model_name])
+        true_labels_bin = label_binarize(true_labels_model, classes=[i for i in range(n_classes)])
+
+        for i in range(n_classes):
+            if i < predictions_model.shape[1]:
+                precision, recall, _ = precision_recall_curve(true_labels_bin[:, i], predictions_model[:, i])
+                ax.plot(recall, precision, lw=2, label=f'{model_name} class {class_names[i]}')
+
+    ax.set_xlabel('Recall')
+    ax.set_ylabel('Precision')
+    ax.legend(loc="best", title="Model and Class")
+    ax.set_title('Precision-Recall Curve')
+    ax.grid(True)
+    return fig
+
+def save_precision_recall_curve(models, true_labels, predictions, class_names, task_name, dataset_name):
+    output_dir = os.path.join('out', task_name, dataset_name, 'visualization')
+    os.makedirs(output_dir, exist_ok=True)
+
+    fig = plot_precision_recall_curve(models, true_labels, predictions, class_names)
+    fig.savefig(os.path.join(output_dir, 'precision_recall_curve.png'))
+    plt.close(fig)
+
+# Plotting and saving training-validation loss/accuracy
+def plot_training_validation_loss_accuracy(history):
+    epochs = np.arange(len(history['epoch'])) + 1
+    fig, ax1 = plt.subplots()
+
+    color = 'tab:red'
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Loss', color=color)
+    ax1.plot(epochs, history['loss'], label='Training Loss', color=color)
+    ax1.plot(epochs, history['val_loss'], label='Validation Loss', color=color, linestyle='dashed')
+    ax1.tick_params(axis='y', labelcolor=color)
+
+    ax2 = ax1.twinx()
+    color = 'tab:blue'
+    ax2.set_ylabel('Accuracy', color=color)
+    ax2.plot(epochs, history['accuracy'], label='Training Accuracy', color=color)
+    ax2.plot(epochs, history['val_accuracy'], label='Validation Accuracy', color=color, linestyle='dashed')
+    ax2.tick_params(axis='y', labelcolor=color)
+
+    fig.tight_layout()
+    plt.title('Training and Validation Loss/Accuracy')
+    ax1.legend(loc='upper left', bbox_to_anchor=(1.05, 1), borderaxespad=0.)
+    return fig
+
+def save_training_validation_loss_accuracy(history, task_name, dataset_name):
+    fig = plot_training_validation_loss_accuracy(history)
+    output_dir = os.path.join('out', task_name, dataset_name, 'visualization')
+    os.makedirs(output_dir, exist_ok=True)
+    fig_path = os.path.join(output_dir, 'training_validation_loss_accuracy.png')
+    fig.savefig(fig_path)
+    plt.close(fig)
+
+def load_and_visualize_training_results(task_name, dataset_name):
+    filename = os.path.join('out', task_name, dataset_name, 'training_history.csv')
+    df = pd.read_csv(filename)
+    history = {
+        'epoch': df['epoch'].tolist(),
+        'loss': df['loss'].tolist(),
+        'accuracy': df['accuracy'].tolist(),
+        'val_loss': df['val_loss'].tolist(),
+        'val_accuracy': df['val_accuracy'].tolist()
+    }
+    save_training_validation_loss_accuracy(history, task_name, dataset_name)
+
+# Combined method to visualize all
+def visualize_all(models, data, task_name, dataset_name, class_names):
+    true_labels_dict, predictions_dict = data
+    for model_name in models:
+        true_labels = true_labels_dict[model_name]
+        predictions = predictions_dict[model_name]
+        save_confusion_matrix(true_labels, predictions, model_name, class_names, task_name, dataset_name)
+
+    save_precision_recall_curve(models, true_labels_dict, predictions_dict, class_names, task_name, dataset_name)
+
+
+
+
+
+# confusion_matrix.py
+
+from sklearn.metrics import confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+import numpy as np
+import os
+
+def plot_confusion_matrix(true_labels, predictions, model_name, class_labels):
+    true_labels, predictions = np.array(true_labels), np.array(predictions)
+    cm = confusion_matrix(true_labels, predictions, labels=class_labels)
+
+    fig = plt.figure(figsize=(10, 7))
+    sns.heatmap(cm, annot=True, fmt='d', xticklabels=class_labels, yticklabels=class_labels)
+    plt.title(f'Confusion Matrix for {model_name}')
+    plt.xlabel('Predicted')
+    plt.ylabel('Truth')
+    return fig
+
+def combine_confusion_matrices(models, true_labels, predictions, class_labels):
+    combined_cm = None
+    for model_name in models:
+        cm = confusion_matrix(true_labels[model_name], predictions[model_name], labels=class_labels)
+        if combined_cm is None:
+            combined_cm = cm
+        else:
+            combined_cm += cm
+    return combined_cm
+
+def save_confusion_matrix(models, true_labels, predictions, task_name, dataset_name, class_labels):
+    output_dir = os.path.join('out', task_name, dataset_name, 'visualization')
+    os.makedirs(output_dir, exist_ok=True)
+
+    for model_name in models:
+        fig = plot_confusion_matrix(true_labels[model_name], predictions[model_name], model_name, class_labels)
+        fig.savefig(os.path.join(output_dir, f'confusion_matrix_{model_name}.png'))
+        plt.close(fig)
+
+    # Save the combined confusion matrix
+    combined_cm = combine_confusion_matrices(models, true_labels, predictions, class_labels)
+    fig = plt.figure(figsize=(10, 7))
+    sns.heatmap(combined_cm, annot=True, fmt='d', xticklabels=class_labels, yticklabels=class_labels)
+    plt.title('Combined Confusion Matrix')
+    plt.xlabel('Predicted')
+    plt.ylabel('Truth')
+
+
+    # precision_recall_curve.py
+import os
+
+import os
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.metrics import precision_recall_curve
+from sklearn.preprocessing import label_binarize
+
+def plot_precision_recall_curve(models, true_labels, predictions, class_names):
+    n_classes = len(class_names)
+    fig = plt.figure()  # Create a new figure
+
+    # Compute Precision-Recall and plot curve for each model
+    for model_name in models:
+        true_labels_model, predictions_model = np.array(true_labels[model_name]), np.array(predictions[model_name])
+        true_labels_bin = label_binarize(true_labels_model, classes=[i for i in range(n_classes)])
+
+        for i in range(n_classes):
+            if i < predictions_model.shape[1]:  # Check if the column exists in the predictions array
+                precision, recall, _ = precision_recall_curve(true_labels_bin[:, i], predictions_model[:, i])
+                plt.plot(recall, precision, lw=2, label=f'{model_name} class {class_names[i]}')
+            else:
+                # Optionally log a message or handle missing classes differently
+                pass  # Skipping silently
+
+    plt.xlabel('Recall')
+    plt.ylabel('Precision')
+    plt.legend(loc="best", title="Model and Class")
+    plt.title('Precision-Recall Curve')
+    plt.grid(True)
+    return fig
+
+def save_precision_recall_curve(models, true_labels, predictions, class_names, task_name, dataset_name):
+    output_dir = os.path.join('out', task_name, dataset_name, 'visualization')
+    os.makedirs(output_dir, exist_ok=True)
+
+    fig = plot_precision_recall_curve(models, true_labels, predictions, class_names)
+    fig.savefig(os.path.join(output_dir, 'precision_recall_curve.png'))
+    plt.close(fig)
+
+
+
+    # training_validation_loss_accuracy.py
+import os
+
+import matplotlib
+matplotlib.use('Agg')  # Use the Agg backend
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+def plot_training_validation_loss_accuracy(history):
+    epochs = np.arange(len(history['epoch'])) + 1
+    fig, ax1 = plt.subplots()
+
+    color = 'tab:red'
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('Loss', color=color)
+    ax1.plot(epochs, history['loss'], label='Training Loss', color=color)
+    ax1.plot(epochs, history['val_loss'], label='Validation Loss', color=color, linestyle='dashed')
+    ax1.tick_params(axis='y', labelcolor=color)
+
+    ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
+    color = 'tab:blue'
+    ax2.set_ylabel('Accuracy', color=color)  # we already handled the x-label with ax1
+    ax2.plot(epochs, history['accuracy'], label='Training Accuracy', color=color)
+    ax2.plot(epochs, history['val_accuracy'], label='Validation Accuracy', color=color, linestyle='dashed')
+    ax2.tick_params(axis='y', labelcolor=color)
+
+    fig.tight_layout()  # otherwise the right y-label is slightly clipped
+    plt.title('Training and Validation Loss/Accuracy')
+    plt.legend(loc='upper left', bbox_to_anchor=(1.05, 1), borderaxespad=0.)
+
+    return fig
+
+
+def save_training_validation_loss_accuracy(history, task_name, dataset_name):
+    fig = plot_training_validation_loss_accuracy(history)
+    output_dir = os.path.join('out', task_name, dataset_name, 'visualization')
+    os.makedirs(output_dir, exist_ok=True)
+    fig_path = os.path.join(output_dir, 'training_validation_loss_accuracy.png')
+    fig.savefig(fig_path)
+    print(f"Plot saved to {fig_path}")  # Debugging: Confirm plot is saved
+    plt.close(fig)
+    plt.show()  # Attempt to display the plot
+    print("plt.show() was called.")  # Debugging: Confirm plt.show() is reached
+
+
+def load_and_visualize_training_results(task_name, dataset_name):
+    filename = os.path.join('out', task_name, dataset_name, 'training_history.csv')
+    df = pd.read_csv(filename)
+    history = {
+        'epoch': df['epoch'].tolist(),
+        'loss': df['loss'].tolist(),
+        'accuracy': df['accuracy'].tolist(),
+        'val_loss': df['val_loss'].tolist(),
+        'val_accuracy': df['val_accuracy'].tolist()
+    }
+    save_training_validation_loss_accuracy(history, task_name, dataset_name)
+
+
+
+
+    # adversarial_examples.py
+
+import matplotlib.pyplot as plt
+import os
+
+def adversarial_examples(data, model_names):
+    """
+    Generates a visualization of original and adversarial examples for multiple models on a single figure.
+
+    Args:
+        data (tuple): A tuple containing original images, adversarial images, and optionally labels.
+        model_names (list): List of model names corresponding to the data.
+
+    Returns:
+        matplotlib.figure.Figure: A matplotlib figure containing the visualizations.
+    """
+    # Unpack data
+    if len(data) == 3:
+        original_images, adversarial_images, labels = data
+    elif len(data) == 2:
+        original_images, adversarial_images = data
+        labels = None
+    else:
+        print("Unexpected data format. Expected a tuple of length 2 or 3.")
+        return None
+
+    num_models = len(model_names)
+    fig, axs = plt.subplots(num_models, 10, figsize=(20, 4 * num_models))
+
+    for model_idx, model_name in enumerate(model_names):
+        for i in range(5):
+            # Display original image
+            original_image = original_images[model_idx][i].cpu().detach()
+            print(f"Original image shape at model {model_name}, index {i}: {original_image.shape}")
+            print(f"Shape of original_images: {original_images.shape}")
+
+
+            if original_image.dim() == 1:
+                print(f"Original image at model {model_name}, index {i} is 1-dimensional.")
+                axs[model_idx, 2 * i].imshow(original_image.numpy(), cmap='gray')
+            elif original_image.dim() == 3:
+                axs[model_idx, 2 * i].imshow(original_image.permute(1, 2, 0).numpy())
+            elif original_image.dim() == 2:
+                axs[model_idx, 2 * i].imshow(original_image.numpy(), cmap='gray')
+            else:
+                print(f"Unexpected dimension {original_image.dim()} for original image at model {model_name}, index {i}")
+                continue
+
+            axs[model_idx, 2 * i].axis('off')
+            axs[model_idx, 2 * i].set_title(f'{model_name} Original {i + 1}')
+
+            # Display adversarial image
+            adversarial_image = adversarial_images[model_idx][i].cpu().detach()
+            print(f"Adversarial image shape at model {model_name}, index {i}: {adversarial_image.shape}")
+            print(f"Shape of adversarial_images: {adversarial_images.shape}")
+
+            if adversarial_image.dim() == 1:
+                print(f"Adversarial image at model {model_name}, index {i} is 1-dimensional.")
+                axs[model_idx, 2 * i + 1].imshow(adversarial_image.numpy(), cmap='gray')
+            elif adversarial_image.dim() == 3:
+                axs[model_idx, 2 * i + 1].imshow(adversarial_image.permute(1, 2, 0).numpy())
+            elif adversarial_image.dim() == 2:
+                axs[model_idx, 2 * i + 1].imshow(adversarial_image.numpy(), cmap='gray')
+            else:
+                print(f"Unexpected dimension {adversarial_image.dim()} for adversarial image at model {model_name}, index {i}")
+                continue
+
+            axs[model_idx, 2 * i + 1].axis('off')
+            axs[model_idx, 2 * i + 1].set_title(f'{model_name} Adversarial {i + 1}')
+
+    return fig
+
+
+def save_adversarial_examples(adv_examples, model_names, task_name, dataset_name, attack_name):
+    """
+    Saves the generated adversarial example figure to the specified directory.
+
+    Args:
+        adv_examples (tuple): A tuple containing original and adversarial images.
+        model_names (list): List of model names corresponding to the data.
+        task_name (str): The task name (e.g., 'attack').
+        dataset_name (str): The dataset name.
+        attack_name (str): The attack name.
+    """
+    output_dir = os.path.join('out', task_name, dataset_name, attack_name, 'visualization')
+    os.makedirs(output_dir, exist_ok=True)
+
+    fig = adversarial_examples(adv_examples, model_names)
+    if fig is not None:
+        fig.savefig(os.path.join(output_dir, 'adversarial_examples.png'))
+        plt.close(fig)  # Close the figure after saving
+
+
+
+
+
+# fgsm.py
+
+import torch
+import torch.nn as nn
+import logging
+
+class FGSMAttack:
+    def __init__(self, model, epsilon, targeted=False):
+        self.model = model
+        self.epsilon = epsilon
+        self.targeted = targeted
+        self.device = next(model.parameters()).device
+        logging.info("FGSM Attack initialized.")
+
+    def attack(self, images, labels):
+        logging.info("Performing FGSM attack.")
+        images = images.to(self.device)
+        labels = labels.to(self.device)
+        loss = nn.CrossEntropyLoss()
+
+        images.requires_grad = True
+
+        outputs = self.model(images)
+        self.model.zero_grad()
+
+        if self.targeted:
+            cost = -loss(outputs, labels)  # Targeted attack: maximize loss on the true label
+        else:
+            cost = loss(outputs, labels)   # Non-targeted attack: maximize loss on predicted label
+
+        cost.backward()
+
+        # Collect the element-wise sign of the data gradient
+        gradient_sign = images.grad.data.sign()
+
+        # Create perturbed image by adjusting each pixel based on the sign of the gradient
+        perturbed_images = images + self.epsilon * gradient_sign
+
+        # Clamp perturbed images to ensure valid pixel range [0, 1]
+        perturbed_images = torch.clamp(perturbed_images, 0, 1)
+
+        # Ensure the number of adversarial examples matches the batch size
+        if len(perturbed_images) < len(images):
+            diff = len(images) - len(perturbed_images)
+            perturbed_images = torch.cat((perturbed_images, images[-diff:]))
+
+        if labels is not None:
+            return images.detach(), perturbed_images.detach(), labels
+        else:
+            return images.detach(), perturbed_images.detach()
+
+
+
+import torch
+import torch.nn as nn
+import logging
+
+class PGDAttack:
+    def __init__(self, model, epsilon, alpha, iterations):
+        self.model = model
+        self.epsilon = epsilon
+        self.alpha = alpha
+        self.iterations = iterations
+        self.device = next(model.parameters()).device
+        logging.info("PGD Attack initialized.")
+
+    def attack(self, images, labels):
+        logging.info("Performing PGD attack.")
+        images = images.to(self.device)
+        labels = labels.to(self.device)
+        loss = nn.CrossEntropyLoss()
+
+        perturbed_images = images.clone().detach()
+        perturbed_images.requires_grad = True
+
+        self.model.eval()  # Ensure model is in evaluation mode
+
+        for _ in range(self.iterations):
+            perturbed_images.grad = None  # Reset gradients
+            outputs = self.model(perturbed_images)
+            cost = loss(outputs, labels)
+            cost.backward()
+
+            with torch.no_grad():
+                perturbed_images += self.alpha * perturbed_images.grad.sign()
+                perturbed_images = torch.max(torch.min(perturbed_images, images + self.epsilon), images - self.epsilon)
+                perturbed_images = torch.clamp(perturbed_images, 0, 1)
+
+            perturbed_images.requires_grad = True  # Ensure gradients are calculated in the next iteration
+
+        return perturbed_images
+
+
+
+
+import torch
+import logging
+
+class JSMAAttack:
+    def __init__(self, model, theta=1.0, gamma=0.1, clip_min=0.0, clip_max=1.0):
+        self.model = model
+        self.theta = theta
+        self.gamma = gamma
+        self.clip_min = clip_min
+        self.clip_max = clip_max
+        self.device = next(model.parameters()).device
+        logging.info("JSMA Attack initialized.")
+
+    def attack(self, images, labels):
+        logging.info("Performing JSMA attack.")
+        images = images.to(self.device)
+        labels = labels.to(self.device)
+        batch_size = images.size(0)
+
+        perturbed_images = images.clone().detach().requires_grad_(True)
+
+        for _ in range(self.theta):
+            # Forward pass
+            outputs = self.model(perturbed_images)
+            loss = torch.nn.CrossEntropyLoss()(outputs, labels)
+            self.model.zero_grad()
+            loss.backward()
+
+            # Create saliency map
+            grad = perturbed_images.grad.data.clone()
+            sign_grad = torch.sign(grad)
+
+            # Perturb the image pixels
+            perturbed_images = self._perturb_image(perturbed_images, sign_grad)
+
+            # Clip the perturbed image to ensure pixel values are within [clip_min, clip_max]
+            perturbed_images = torch.clamp(perturbed_images, self.clip_min, self.clip_max)
+
+        return perturbed_images
+
+    def _perturb_image(self, images, sign_grad):
+        # Create the adversarial perturbation
+        perturbation = torch.zeros_like(images).to(self.device)
+
+        for i in range(images.size(0)):
+            perturbation[i] += sign_grad[i]
+
+        perturbed_images = images + self.gamma * perturbation
+        return perturbed_images
+
+
+
+import torch
+
+class AdversarialTraining:
+    def __init__(self, model, criterion, optimizer, epochs):
+        self.model = model
+        self.criterion = criterion
+        self.optimizer = optimizer
+        self.epochs = epochs
+
+    def defend(self, data, targets):
+        data, targets = data.to(self.model.device), targets.to(self.model.device)
+
+        for epoch in range(self.epochs):
+            self.model.train()
+            self.optimizer.zero_grad()
+
+            outputs = self.model(data)
+            loss = self.criterion(outputs, targets)
+
+            loss.backward()
+            self.optimizer.step()
+
+        return data
