@@ -59,7 +59,7 @@ class Trainer:
         if adversarial:
             self.adversarial_training = AdversarialTraining(model, criterion, epsilon=0.3, alpha=0.01)
         self.scaler = GradScaler()
-        self.accumulation_steps = 1
+        self.accumulation_steps = args.accumulation_steps
 
         # Set random seed for reproducibility
         self.set_random_seed(args.manualSeed)

@@ -4,6 +4,7 @@ import sys
 import torch
 import torchvision
 from torch import nn
+
 from loader.dataset_loader import DatasetLoader
 from model.model_loader import ModelLoader
 from utils.logger import setup_logger
@@ -66,7 +67,7 @@ def get_hyperparams(args):
 
 def initialize_components(args):
     datasets_dict = DatasetLoader.get_all_datasets(args.data, args.data_dir)
-    models_dict = ModelLoader(args.device, args.arch)
+    models_dict = ModelLoader(args.device, args.arch, args.pretrained)
     optimizers_dict = OptimizerLoader()
     lr_scheduler_loader = LRSchedulerLoader()
     return datasets_dict, models_dict, optimizers_dict, lr_scheduler_loader

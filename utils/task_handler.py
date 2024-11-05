@@ -228,41 +228,6 @@ class TaskHandler:
             f"Adversarial samples visualized for {model_name_with_depth} using {self.args.attack_name}")
 
 
-    def apply_defense(self, defense, defense_name, adv_examples_dict, dataset_name, model_name, all_results,
-                      test_loader):
-        defense_results = {}  # Store robustness results
-
-        for attack_name, (adv_examples, adv_labels) in adv_examples_dict.items():
-            defended_model, correct, total = defense.defend(torch.stack(adv_examples), torch.stack(adv_labels))
-
-            # Train the defended model on adversarial examples if applicable
-            adv_train_dataset = torch.utils.data.TensorDataset(torch.stack(adv_examples), torch.stack(adv_labels))
-            defended_model, trainer = self.train_and_evaluate_model(model_name=model_name,
-                                                                    dataset_name=dataset_name,
-                                                                    train_loader=adv_train_dataset,
-                                                                    val_loader=None,
-                                                                    test_loader=test_loader,
-                                                                    input_channels=self.input_channels_dict[
-                                                                        dataset_name],
-                                                                    adversarial=True)
-
-            # Evaluate defended model
-            true_labels, predictions = trainer.get_test_results()
-            evaluator = Evaluator(defense_name, [], true_labels, predictions, self.current_task)
-            evaluator.evaluate(dataset_name)
-            all_results.append(evaluator)
-
-            # Collect robustness results
-            accuracy = (torch.tensor(predictions) == torch.tensor(true_labels)).float().mean().item()
-            defense_results[defense_name] = {
-                'attack_name': attack_name,
-                'accuracy': accuracy,
-                'num_examples': len(adv_examples),
-            }
-
-        return defense_results
-
-
 
     def train_and_evaluate_model(self, model_name, dataset_name, train_loader, val_loader, test_loader, input_channels,
                                  depths, num_classes, class_names, adversarial=False):

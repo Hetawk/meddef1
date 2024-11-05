@@ -1,8 +1,6 @@
-# adversarial_examples.py
-
 import matplotlib.pyplot as plt
 import os
-
+import logging
 
 def adversarial_examples(data, model_names):
     """
@@ -22,7 +20,7 @@ def adversarial_examples(data, model_names):
         original_images, adversarial_images = data
         labels = None
     else:
-        print("Unexpected data format. Expected a tuple of length 2 or 3.")
+        logging.error("Unexpected data format. Expected a tuple of length 2 or 3.")
         return None
 
     num_models = len(model_names)
@@ -32,17 +30,17 @@ def adversarial_examples(data, model_names):
         for i in range(5):
             # Display original image
             original_image = original_images[model_idx][i].cpu().detach()
-            print(f"Original image shape at model {model_name}, index {i}: {original_image.shape}")
+            logging.info(f"Original image shape at model {model_name}, index {i}: {original_image.shape}")
 
             if original_image.dim() == 1:
-                print(f"Original image at model {model_name}, index {i} is 1-dimensional.")
+                logging.warning(f"Original image at model {model_name}, index {i} is 1-dimensional.")
                 axs[model_idx, 2 * i].imshow(original_image.numpy(), cmap='gray')
             elif original_image.dim() == 3:
                 axs[model_idx, 2 * i].imshow(original_image.permute(1, 2, 0).numpy())
             elif original_image.dim() == 2:
                 axs[model_idx, 2 * i].imshow(original_image.numpy(), cmap='gray')
             else:
-                print(f"Unexpected dimension {original_image.dim()} for original image at model {model_name}, index {i}")
+                logging.error(f"Unexpected dimension {original_image.dim()} for original image at model {model_name}, index {i}")
                 continue
 
             axs[model_idx, 2 * i].axis('off')
@@ -50,17 +48,17 @@ def adversarial_examples(data, model_names):
 
             # Display adversarial image
             adversarial_image = adversarial_images[model_idx][i].cpu().detach()
-            print(f"Adversarial image shape at model {model_name}, index {i}: {adversarial_image.shape}")
+            logging.info(f"Adversarial image shape at model {model_name}, index {i}: {adversarial_image.shape}")
 
             if adversarial_image.dim() == 1:
-                print(f"Adversarial image at model {model_name}, index {i} is 1-dimensional.")
+                logging.warning(f"Adversarial image at model {model_name}, index {i} is 1-dimensional.")
                 axs[model_idx, 2 * i + 1].imshow(adversarial_image.numpy(), cmap='gray')
             elif adversarial_image.dim() == 3:
                 axs[model_idx, 2 * i + 1].imshow(adversarial_image.permute(1, 2, 0).numpy())
             elif adversarial_image.dim() == 2:
                 axs[model_idx, 2 * i + 1].imshow(adversarial_image.numpy(), cmap='gray')
             else:
-                print(f"Unexpected dimension {adversarial_image.dim()} for adversarial image at model {model_name}, index {i}")
+                logging.error(f"Unexpected dimension {adversarial_image.dim()} for adversarial image at model {model_name}, index {i}")
                 continue
 
             axs[model_idx, 2 * i + 1].axis('off')

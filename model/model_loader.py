@@ -1,26 +1,30 @@
 import os
 import torch
 import logging
+
+from model.backbone.cbam.resnet_cbam import get_resnet_with_cbam
 from model.backbone.resnet import get_resnet
 from model.densenet_model import get_densenet
 from model.vgg_model import get_vgg
 from model.attention.MSARNet import MSARNet
 
 class ModelLoader:
-    def __init__(self, device, arch):
+    def __init__(self, device, arch, pretrained=True):
         self.device = device
         self.arch = arch
+        self.pretrained = pretrained
 
         # Define model architectures and their depths
         self.models_dict = {
             'resnet': {'func': get_resnet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'densenet': {'func': get_densenet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'vgg': {'func': get_vgg, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
-            'msarnet': {'func': MSARNet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']}
+            'msarnet': {'func': MSARNet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
+            'rcbam': {'func': get_resnet_with_cbam, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']}
         }
         logging.info("ModelLoader initialized with models: " + ", ".join(self.models_dict.keys()))
 
-    def get_model(self, model_name=None, depth=None, input_channels=3, num_classes=None, pretrained=True):
+    def get_model(self, model_name=None, depth=None, input_channels=3, num_classes=None):
         """Retrieves a model based on specified architecture, depth, and configurations."""
         model_name = model_name or self.arch
 
@@ -37,7 +41,7 @@ class ModelLoader:
         # Prepare the arguments for the model function
         kwargs = {
             'depth': depth,
-            'pretrained': pretrained,
+            'pretrained': self.pretrained,
             'input_channels': input_channels,
             'num_classes': num_classes
         }
@@ -68,8 +72,7 @@ class ModelLoader:
             model_name=model_name,
             depth=depth,
             input_channels=input_channels,
-            num_classes=num_classes,
-            pretrained=False
+            num_classes=num_classes
         )
 
         model = model.to(self.device)
@@ -86,7 +89,7 @@ class ModelLoader:
 
         return model
 
-    def load_multiple_models(self, model_name, depths, input_channels=3, num_classes=None, pretrained=True):
+    def load_multiple_models(self, model_name, depths, input_channels=3, num_classes=None):
         """Loads multiple models of the same architecture but different depths, as specified."""
         models = {}
         for depth in depths:
@@ -95,8 +98,7 @@ class ModelLoader:
                     model_name=model_name,
                     depth=depth,
                     input_channels=input_channels,
-                    num_classes=num_classes,
-                    pretrained=pretrained
+                    num_classes=num_classes
                 )
                 models[depth] = model
                 logging.info(f"Model {model_name_with_depth} loaded successfully.")

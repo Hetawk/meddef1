@@ -25,6 +25,7 @@ def get_args():
     parser.add_argument('--patience', default=5, type=int, metavar='N', help='patience for early stopping')
     parser.add_argument('--lambda_l2', default=0.01, type=float, metavar='L2', help='L2 regularization lambda')
     parser.add_argument('--alpha', default=0.01, type=float, metavar='Alpha', help='Alpha value for adversarial training')
+    parser.add_argument('--accumulation_steps', default=1, type=int, help='Number of gradient accumulation steps')
 
     # Checkpoints
     parser.add_argument('-c', '--checkpoint', default='checkpoint', type=str, metavar='PATH', help='path to save checkpoint (default: checkpoint)')
