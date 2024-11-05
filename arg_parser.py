@@ -47,6 +47,10 @@ def get_args():
     # Task to run
     parser.add_argument('--task_name', type=str, choices=['normal_training', 'attack', 'defense'], default='normal_training', help='Task to run: normal_training, attack, or defense')
 
+    # Attack options
+    parser.add_argument('--attack_name', type=str, default='fgsm', help='Name of the attack to use (e.g., fgsm, pgd)')
+    parser.add_argument('--epsilon', type=float, default=0.3, help='Epsilon value for the attack')
+
     # Defense options
     parser.add_argument('--prune_rate', type=float, default=0.2, help='Pruning rate for unstructured pruning')
     

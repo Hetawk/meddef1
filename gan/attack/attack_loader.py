@@ -1,5 +1,3 @@
-# attack_loader.py
-
 import logging
 from gan.attack.fgsm import FGSMAttack
 from gan.attack.pgd import PGDAttack
@@ -15,24 +13,21 @@ class AttackLoader:
     def __init__(self, model):
         self.model = model
         self.attacks_dict = {
-            'fgsm': FGSMAttack(self.model, epsilon=0.3),
-            'pgd': PGDAttack(self.model, epsilon=0.3, alpha=0.01, iterations=40),
-            # 'boundary': BoundaryAttack,
-            # 'bim': BIMAttack,
-            # 'cw': CWAttack,
-            # 'elasticnet': ElasticNetAttack,
-            # 'jsma': JSMAAttack,
-            # 'onepixel': OnePixelAttack,
-            # 'zoo': ZooAttack
-            # Add more attacks here as needed
+            'fgsm': FGSMAttack,
+            'pgd': PGDAttack,
+            'boundary': BoundaryAttack,
+            'bim': BIMAttack,
+            'cw': CWAttack,
+            'elasticnet': ElasticNetAttack,
+            'jsma': JSMAAttack,
+            'onepixel': OnePixelAttack,
+            'zoo': ZooAttack
         }
         logging.info("AttackLoader initialized with attacks: " + ", ".join(self.attacks_dict.keys()))
 
-    def get_attack(self, attack_name):
+    def get_attack(self, attack_name, **attack_params):
         logging.info(f"Getting attack {attack_name}.")
         if attack_name in self.attacks_dict:
-            return self.attacks_dict[attack_name]
+            return self.attacks_dict[attack_name](self.model, **attack_params)
         else:
             raise ValueError(f"Attack {attack_name} not recognized.")
-
-

@@ -38,7 +38,10 @@ class Visualization:
         save_precision_recall_curve(models, true_labels_dict, predictions_dict, class_names, task_name, dataset_name)
         save_class_distribution(true_labels_dict, class_names, task_name, dataset_name)
 
-    def visualize_attack(self, adv_examples, model_names, task_name, dataset_name, attack_name):
+    def visualize_attack(self, original, adversarial, labels, model_name_with_depth, task_name, dataset_name,
+                         attack_name):
+        adv_examples = (original, adversarial, labels)
+        model_names = [model_name_with_depth]
         save_adversarial_examples(adv_examples, model_names, task_name, dataset_name, attack_name)
         save_perturbation_visualization(adv_examples, model_names, task_name, dataset_name)
 

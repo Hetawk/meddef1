@@ -6,6 +6,7 @@ from datetime import datetime
 import numpy as np
 import torch
 from gan.attack.attack_loader import AttackLoader
+from gan.attack.attacker import AttackHandler
 from gan.defense.defense_loader import DefenseLoader
 from gan.defense.prune import Pruner
 from loader.dataset_loader import DatasetLoader
@@ -169,52 +170,62 @@ class TaskHandler:
     def run_attack(self):
         self.current_task = 'attack'
         logging.info("Attack task selected.")
-        all_results = []
 
-        for dataset_name, (train_loader, val_loader, test_loader) in self.datasets_dict.items():
-            logging.info(f"Processing dataset: {dataset_name}")
+        dataset_name = self.dataset_name
+        if dataset_name not in self.datasets_dict:
+            raise ValueError(f"Dataset {dataset_name} not found in datasets_dict.")
 
-            model_names = []
-            for model_name in self.models_loader.models_dict.keys():
-                logging.info(f"Loading model: {model_name}")
-                model = self.models_loader.load_pretrained_model(model_name, 'normal_training', dataset_name)
-                model.to(self.device)
-                model_names.append(model_name)
+        dataset_loader = self.datasets_dict[dataset_name]
+        _, _, test_loader = dataset_loader.load(
+            train_batch_size=self.args.train_batch,
+            val_batch_size=self.args.test_batch,
+            test_batch_size=self.args.test_batch,
+            num_workers=self.args.workers,
+            pin_memory=self.args.pin_memory
+        )
+        logging.info(f"Loaded dataset for attack: {dataset_name}")
 
-                self.attack_loader = AttackLoader(model)
-                for attack_name in self.attack_loader.attacks_dict.keys():
-                    logging.info(f"Running attack: {attack_name}")
-                    attack = self.attack_loader.get_attack(attack_name)
+        for model_name in self.args.arch:
+            depths = self.args.depth.get(model_name, []) if isinstance(self.args.depth, dict) else [self.args.depth]
 
-                    adv_examples_list = []
-                    for batch_idx, (data, labels) in enumerate(test_loader):
-                        if batch_idx >= 3:  # Limit to first few batches
-                            break
-                        data, labels = data.to(self.device), labels.to(self.device)
-                        adv_example = attack.attack(data, labels)
+            for depth in depths:
+                model_info = self.models_loader.get_model(
+                    model_name, depth=depth, input_channels=self.input_channels_dict.get(dataset_name),
+                    num_classes=self.num_classes
+                )
 
-                        if len(adv_example) >= 2 and adv_example[1].size(0) > 0:
-                            adv_examples_list.append(adv_example)
+                if isinstance(model_info, dict):
+                    for depth, (model, model_name_with_depth) in model_info.items():
+                        model.to(self.device)
+                        self._run_attack_for_model(model, model_name_with_depth, test_loader, dataset_name)
+                else:
+                    model, model_name_with_depth = model_info
+                    model.to(self.device)
+                    self._run_attack_for_model(model, model_name_with_depth, test_loader, dataset_name)
 
-                    # Visualization and logging of adversarial examples
-                    class_names = self.classes.get(dataset_name, [])
-                    self.visualization.visualize_attack(adv_examples_list, model_names, self.current_task, dataset_name,
-                                                        attack_name)
-                    logging.info(
-                        f"Generated {len(adv_examples_list)} adversarial examples for dataset: {dataset_name} "
-                        f"using attack: {attack_name}")
+    def _run_attack_for_model(self, model, model_name_with_depth, test_loader, dataset_name):
+        attack_handler = AttackHandler(
+            model=model,
+            attack_name=self.args.attack_name,  # e.g., 'fgsm' or 'pgd'
+            epsilon=self.args.epsilon  # Additional attack-specific parameters
+        )
 
-                    all_results.append({
-                        'dataset_name': dataset_name,
-                        'model_name': model_name,
-                        'attack_name': attack_name,
-                        'adv_examples': adv_examples_list
-                    })
+        results = attack_handler.generate_adversarial_samples(test_loader)
 
-        # Save all results into consolidated CSV file
-        # self.save_results(all_results)
+        # Save adversarial samples
+        save_path = os.path.join('out', self.current_task, dataset_name, model_name_with_depth,
+                                 'adversarial_samples.pth')
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        torch.save(results, save_path)
+        logging.info(f"Adversarial samples saved to {save_path}")
 
-
+        # Visualize adversarial samples
+        self.visualization.visualize_attack(
+            results['original'], results['adversarial'], results['labels'],
+            model_name_with_depth, self.current_task, dataset_name, self.args.attack_name
+        )
+        logging.info(
+            f"Adversarial samples visualized for {model_name_with_depth} using {self.args.attack_name}")
 
 
     def apply_defense(self, defense, defense_name, adv_examples_dict, dataset_name, model_name, all_results,
@@ -251,35 +262,7 @@ class TaskHandler:
 
         return defense_results
 
-    def compute_perturbation_data(self, defense, adv_examples_dict):
-        perturbations = {}
-        for attack_name, (adv_examples, _) in adv_examples_dict.items():
-            perturbation_list = []
-            for example in adv_examples:
-                # Compute perturbation for each adversarial example
-                perturbation = example - example.detach()
-                perturbation_list.append(perturbation.abs().mean().item())
-            perturbations[attack_name] = perturbation_list
-        return perturbations
 
-    def generate_adv_examples(self, test_loader):
-        adv_examples_dict = {}
-        for attack_name in self.attack_loader.attacks_dict.keys():
-            logging.info(f"Running attack: {attack_name}")
-            attack = self.attack_loader.get_attack(attack_name)
-
-            adv_examples_list = []
-            adv_labels_list = []
-            for data, labels in test_loader:
-                data, labels = data.to(self.device), labels.to(self.device)
-                adv_example = attack.attack(data, labels)
-
-                if adv_example:
-                    adv_examples_list.append(adv_example[0])
-                    adv_labels_list.append(adv_example[1])
-
-            adv_examples_dict[attack_name] = (adv_examples_list, adv_labels_list)
-        return adv_examples_dict
 
     def train_and_evaluate_model(self, model_name, dataset_name, train_loader, val_loader, test_loader, input_channels,
                                  depths, num_classes, class_names, adversarial=False):

@@ -3,6 +3,7 @@
 import matplotlib.pyplot as plt
 import os
 
+
 def adversarial_examples(data, model_names):
     """
     Generates a visualization of original and adversarial examples for multiple models on a single figure.
@@ -50,7 +51,6 @@ def adversarial_examples(data, model_names):
             # Display adversarial image
             adversarial_image = adversarial_images[model_idx][i].cpu().detach()
             print(f"Adversarial image shape at model {model_name}, index {i}: {adversarial_image.shape}")
-            print(f"Shape of adversarial_images: {adversarial_images.shape}")
 
             if adversarial_image.dim() == 1:
                 print(f"Adversarial image at model {model_name}, index {i} is 1-dimensional.")
