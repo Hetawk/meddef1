@@ -25,16 +25,18 @@ def plot_confusion_matrix(model_name, true_labels, predictions, class_names=None
     conf_matrix = confusion_matrix(true_labels, predictions)
 
     # If class_names is not provided, generate default class names
+    unique_classes = np.union1d(true_labels, predictions)
     if class_names is None:
-        unique_classes = np.union1d(true_labels, predictions)
         class_names = [f'class {i}' for i in unique_classes]
     else:
         # Check if the dataset is CCTS and map the original class names to shorter names
         if dataset_name.lower() == 'ccts':
             class_names = [ccts_class_name_mapping.get(name, name) for name in class_names]
+        # Check if the dataset is SCISIC and apply simple class names
+        elif dataset_name.lower() == 'scisic':
+            class_names = [f'class {i}' for i in unique_classes]
 
     # Ensure the number of class names matches the number of unique classes
-    unique_classes = np.union1d(true_labels, predictions)
     if len(class_names) != len(unique_classes):
         error_message = f"Confusion Matrix: - The number of class names ({len(class_names)}) does not match the number of unique classes ({len(unique_classes)}) in the data."
         logging.error(error_message)
@@ -44,8 +46,6 @@ def plot_confusion_matrix(model_name, true_labels, predictions, class_names=None
         raise ValueError(error_message)
 
     # Debugging prints
-    # print(f"Confusion Matrix: - True labels: {true_labels}")
-    # print(f"Confusion Matrix: - Predictions: {predictions}")
     print(f"Confusion Matrix: - Confusion matrix: \n{conf_matrix}")
     print(f"Confusion Matrix: - Class names: {class_names}")
     print(f"Confusion Matrix: - Unique classes: {unique_classes}")

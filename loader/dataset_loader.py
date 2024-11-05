@@ -367,7 +367,7 @@ class DatasetLoader:
         target = np.array(All_target)
         logging.info("\nClass distribution in the dataset:")
         for i, class_name in enumerate(original_dataset.classes):
-            logging.info(f"{np.sum(target == i)}: {class_name}:")
+            logging.info(f"{np.sum(target == i)}: {class_name}")
 
         class_sample_count = np.array(
             [len(np.where(target == t)[0]) for t in np.unique(target)])
