@@ -5,6 +5,8 @@ from datetime import datetime
 
 import numpy as np
 import torch
+
+from gan.adversarial_example_generator import AdversarialExampleGenerator
 from gan.attack.attack_loader import AttackLoader
 from gan.attack.attacker import AttackHandler
 from gan.defense.defense_loader import DefenseLoader
@@ -42,6 +44,10 @@ class TaskHandler:
         self.trained_models = {}
         self.num_classes = num_classes
 
+        # Initialize AdversarialExampleGenerator
+        self.adversarial_example_generator = AdversarialExampleGenerator(noise_dim=100,
+                                                                         data_dim=input_channels_dict[dataset_name],
+                                                                         device=device)
     def run_train(self):
         """Runs the training process for the specified dataset and models."""
         self.current_task = 'normal_training'
@@ -108,6 +114,19 @@ class TaskHandler:
                     all_results.append(evaluator)
                 except Exception as e:
                     logging.error(f"Error evaluating model {model_name_with_depth}: {e}")
+
+                # Generate and visualize adversarial examples
+                original_data = []
+                for data, _ in test_loader:
+                    original_data.append(data)
+                original_data = torch.cat(original_data, dim=0)
+
+                adversarial_examples = self.adversarial_example_generator.generate_adversarial_examples(
+                    len(original_data))
+                self.adversarial_example_generator.visualize_adversarial_examples(
+                    original_data, adversarial_examples, model_name_with_depth, self.current_task,
+                    dataset_name, 'gan_attack'
+                )
 
         logging.info(f"Taskhandler: - Class names: {self.classes[dataset_name]}")
         self.visualization.visualize_normal(
@@ -256,7 +275,8 @@ class TaskHandler:
                 momentum=hyperparams.get('momentum', 0)
             )
 
-            if self.current_task in ['defense', 'attack']:
+            # if self.current_task in ['defense', 'attack']:
+            if self.current_task in ['normal_training']:
                 adversarial = True
 
             if self.current_task is None or dataset_name is None:

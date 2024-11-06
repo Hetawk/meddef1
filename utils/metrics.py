@@ -1,11 +1,10 @@
-# metrics.py
-
 import numpy as np
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score,
     f1_score, confusion_matrix, balanced_accuracy_score,
     matthews_corrcoef, roc_auc_score, average_precision_score
 )
+from sklearn.preprocessing import label_binarize
 from typing import Dict, Any, Optional
 
 class Metrics:
@@ -36,10 +35,12 @@ class Metrics:
         metrics['balanced_accuracy'] = balanced_accuracy_score(true_labels, all_predictions)
         metrics['mcc'] = matthews_corrcoef(true_labels, all_predictions)
 
-        # Ensure the correct shape for ROC-AUC calculation
-        if all_probabilities is not None and len(np.unique(true_labels)) == 2:
-            metrics['roc_auc'] = roc_auc_score(true_labels, all_probabilities)
-            metrics['average_precision'] = average_precision_score(true_labels, all_probabilities)
+        # Ensure the correct shape for ROC-AUC and average precision calculation
+        if all_probabilities is not None:
+            # Binarize the true labels for multi-class classification
+            true_labels_binarized = label_binarize(true_labels, classes=np.unique(true_labels))
+            metrics['roc_auc'] = roc_auc_score(true_labels_binarized, all_probabilities, average='macro', multi_class='ovr')
+            metrics['average_precision'] = average_precision_score(true_labels_binarized, all_probabilities, average='macro')
         else:
             metrics['roc_auc'] = None
             metrics['average_precision'] = None

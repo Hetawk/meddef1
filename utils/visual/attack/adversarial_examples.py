@@ -26,15 +26,19 @@ def adversarial_examples(data, model_names):
     num_models = len(model_names)
     fig, axs = plt.subplots(num_models, 10, figsize=(20, 4 * num_models))
 
+    # If there's only one model, axs will be 1D, so we reshape it to 2D for easier indexing
+    if num_models == 1:
+        axs = axs.reshape(1, -1)
+
     for model_idx, model_name in enumerate(model_names):
         for i in range(5):
             # Display original image
-            original_image = original_images[model_idx][i].cpu().detach()
+            original_image = original_images[i].cpu().detach()
             logging.info(f"Original image shape at model {model_name}, index {i}: {original_image.shape}")
 
             if original_image.dim() == 1:
                 logging.warning(f"Original image at model {model_name}, index {i} is 1-dimensional.")
-                axs[model_idx, 2 * i].imshow(original_image.numpy(), cmap='gray')
+                axs[model_idx, 2 * i].imshow(original_image.unsqueeze(0).numpy(), cmap='gray')
             elif original_image.dim() == 3:
                 axs[model_idx, 2 * i].imshow(original_image.permute(1, 2, 0).numpy())
             elif original_image.dim() == 2:
@@ -47,12 +51,12 @@ def adversarial_examples(data, model_names):
             axs[model_idx, 2 * i].set_title(f'{model_name} Original {i + 1}')
 
             # Display adversarial image
-            adversarial_image = adversarial_images[model_idx][i].cpu().detach()
+            adversarial_image = adversarial_images[i].cpu().detach()
             logging.info(f"Adversarial image shape at model {model_name}, index {i}: {adversarial_image.shape}")
 
             if adversarial_image.dim() == 1:
                 logging.warning(f"Adversarial image at model {model_name}, index {i} is 1-dimensional.")
-                axs[model_idx, 2 * i + 1].imshow(adversarial_image.numpy(), cmap='gray')
+                axs[model_idx, 2 * i + 1].imshow(adversarial_image.unsqueeze(0).numpy(), cmap='gray')
             elif adversarial_image.dim() == 3:
                 axs[model_idx, 2 * i + 1].imshow(adversarial_image.permute(1, 2, 0).numpy())
             elif adversarial_image.dim() == 2:
@@ -65,6 +69,7 @@ def adversarial_examples(data, model_names):
             axs[model_idx, 2 * i + 1].set_title(f'{model_name} Adversarial {i + 1}')
 
     return fig
+
 
 def save_adversarial_examples(adv_examples, model_names, task_name, dataset_name, attack_name):
     """
