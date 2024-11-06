@@ -1,9 +1,9 @@
+
 import torch
 import torch.nn as nn
 from typing import Type, Tuple, Dict, Union, Optional
 from model.attention.base_robust_method import BaseRobustMethod
 from model.backbone.cbam.cbam_backbone import CBAMBasicBlock, CBAMBottleneckBlock
-
 
 class ResNetModelWithCBAM(nn.Module):
     def __init__(self, block: Union[Type[CBAMBasicBlock], Type[CBAMBottleneckBlock]], layers: Tuple[int, int, int, int],
@@ -31,14 +31,20 @@ class ResNetModelWithCBAM(nn.Module):
         expansion = block.expansion
 
         # Handle the first block in the layer with stride if needed
-        layers.append(block(self.in_channels, out_channels, stride=stride, bottleneck_channels=bottleneck_channels))
+        if block == CBAMBottleneckBlock:
+            layers.append(block(self.in_channels, out_channels, stride=stride, bottleneck_channels=bottleneck_channels))
+        else:
+            layers.append(block(self.in_channels, out_channels, stride=stride))
 
         # Update in_channels for the following blocks in the layer
         self.in_channels = out_channels * expansion
 
         # Add the remaining blocks in this layer
         for _ in range(1, blocks):
-            layers.append(block(self.in_channels, out_channels, bottleneck_channels=bottleneck_channels))
+            if block == CBAMBottleneckBlock:
+                layers.append(block(self.in_channels, out_channels, bottleneck_channels=bottleneck_channels))
+            else:
+                layers.append(block(self.in_channels, out_channels))
             self.in_channels = out_channels * expansion  # Ensures the next block starts with the correct in_channels
 
         return nn.Sequential(*layers)

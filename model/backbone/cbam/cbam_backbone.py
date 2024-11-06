@@ -70,9 +70,12 @@ class CBAMResNet(ResNet):
         layers = []
         for i in range(num_blocks):
             if i == 0:
-                layers.append(block(in_channels, out_channels, stride=stride, norm=norm, bottleneck_channels=bottleneck_channels))
+                if block == CBAMBottleneckBlock:
+                    layers.append(block(in_channels, out_channels, stride=stride, norm=norm, bottleneck_channels=bottleneck_channels))
+                else:
+                    layers.append(block(in_channels, out_channels, stride=stride, norm=norm))
             else:
-                layers.append(block(out_channels * block.expansion, out_channels, stride=1, norm=norm, bottleneck_channels=bottleneck_channels))
+                layers.append(block(out_channels * block.expansion, out_channels, stride=1, norm=norm))
             in_channels = out_channels * block.expansion
         return nn.Sequential(*layers)
 
