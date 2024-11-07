@@ -48,28 +48,29 @@ def adversarial_examples(data, model_names):
                 continue
 
             axs[model_idx, 2 * i].axis('off')
-            axs[model_idx, 2 * i].set_title(f'{model_name} Original {i + 1}')
+            axs[model_idx, 2 * i].set_title(f'Real {i + 1}')
 
             # Display adversarial image
             adversarial_image = adversarial_images[i].cpu().detach()
             logging.info(f"Adversarial image shape at model {model_name}, index {i}: {adversarial_image.shape}")
 
+            # Reshape adversarial image if necessary
             if adversarial_image.dim() == 1:
                 logging.warning(f"Adversarial image at model {model_name}, index {i} is 1-dimensional.")
-                axs[model_idx, 2 * i + 1].imshow(adversarial_image.unsqueeze(0).numpy(), cmap='gray')
+                continue  # Skip this image
             elif adversarial_image.dim() == 3:
-                axs[model_idx, 2 * i + 1].imshow(adversarial_image.permute(1, 2, 0).numpy())
+                adversarial_image = adversarial_image.permute(1, 2, 0)
             elif adversarial_image.dim() == 2:
-                axs[model_idx, 2 * i + 1].imshow(adversarial_image.numpy(), cmap='gray')
+                adversarial_image = adversarial_image.unsqueeze(0)
             else:
                 logging.error(f"Unexpected dimension {adversarial_image.dim()} for adversarial image at model {model_name}, index {i}")
                 continue
 
+            axs[model_idx, 2 * i + 1].imshow(adversarial_image.numpy(), cmap='gray')
             axs[model_idx, 2 * i + 1].axis('off')
-            axs[model_idx, 2 * i + 1].set_title(f'{model_name} Adversarial {i + 1}')
+            axs[model_idx, 2 * i + 1].set_title(f'Adversarial {i + 1}')
 
     return fig
-
 
 def save_adversarial_examples(adv_examples, model_names, task_name, dataset_name, attack_name):
     """

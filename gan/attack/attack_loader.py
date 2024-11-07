@@ -10,24 +10,25 @@ from gan.attack.onepixel import OnePixelAttack
 from gan.attack.zoo import ZooAttack
 
 class AttackLoader:
-    def __init__(self, model):
+    def __init__(self, model, args):
         self.model = model
+        self.args = args
         self.attacks_dict = {
-            'fgsm': FGSMAttack,
-            'pgd': PGDAttack,
-            'boundary': BoundaryAttack,
-            'bim': BIMAttack,
-            'cw': CWAttack,
-            'elasticnet': ElasticNetAttack,
-            'jsma': JSMAAttack,
-            'onepixel': OnePixelAttack,
-            'zoo': ZooAttack
+            'fgsm': FGSMAttack(self.model, epsilon=args.epsilon),
+            'pgd': PGDAttack(self.model, epsilon=args.epsilon, alpha=args.alpha, iterations=args.iterations),
+            'bim': BIMAttack(self.model, epsilon=args.epsilon, alpha=args.alpha, iterations=args.iterations),
+            # 'cw': CWAttack(self.model),
+            # 'elasticnet': ElasticNetAttack(self.model),
+            # 'boundary': BoundaryAttack(self.model),
+            # 'jsma': JSMAAttack(self.model),
+            # 'onepixel': OnePixelAttack(self.model),
+            # 'zoo': ZooAttack(self.model)
         }
         logging.info("AttackLoader initialized with attacks: " + ", ".join(self.attacks_dict.keys()))
 
-    def get_attack(self, attack_name, **attack_params):
+    def get_attack(self, attack_name):
         logging.info(f"Getting attack {attack_name}.")
         if attack_name in self.attacks_dict:
-            return self.attacks_dict[attack_name](self.model, **attack_params)
+            return self.attacks_dict[attack_name]
         else:
             raise ValueError(f"Attack {attack_name} not recognized.")

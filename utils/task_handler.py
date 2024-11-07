@@ -1,4 +1,3 @@
-# task_handler.py
 import logging
 import os
 from datetime import datetime
@@ -7,7 +6,6 @@ import numpy as np
 import torch
 
 from gan.adversarial_example_generator import AdversarialExampleGenerator
-from gan.attack.attack_loader import AttackLoader
 from gan.attack.attacker import AttackHandler
 from gan.defense.defense_loader import DefenseLoader
 from gan.defense.prune import Pruner
@@ -18,9 +16,6 @@ from utils.evaluator import Evaluator
 from utils.robustness.cross_validation import CrossValidator
 from utils.visual.normal_visual import visualize_all
 from utils.visual.visualization import Visualization
-
-
-# task_handler.py
 
 class TaskHandler:
     def __init__(self, datasets_dict, models_loader, optimizers_dict, hyperparams_dict, input_channels_dict, classes,
@@ -44,10 +39,16 @@ class TaskHandler:
         self.trained_models = {}
         self.num_classes = num_classes
 
-        # Initialize AdversarialExampleGenerator
+        # Initialize AdversarialExampleGenerator with the required model argument
+        model, _ = self.models_loader.get_model(model_name=args.arch[0], depth=args.depth[args.arch[0]][0],
+                                                input_channels=input_channels_dict[dataset_name],
+                                                num_classes=num_classes)
         self.adversarial_example_generator = AdversarialExampleGenerator(noise_dim=100,
                                                                          data_dim=input_channels_dict[dataset_name],
-                                                                         device=device)
+                                                                         device=device,
+                                                                         model=model,
+                                                                         args=args)
+
     def run_train(self):
         """Runs the training process for the specified dataset and models."""
         self.current_task = 'normal_training'
@@ -226,7 +227,7 @@ class TaskHandler:
         attack_handler = AttackHandler(
             model=model,
             attack_name=self.args.attack_name,  # e.g., 'fgsm' or 'pgd'
-            epsilon=self.args.epsilon  # Additional attack-specific parameters
+            args=self.args  # Pass the args to the AttackHandler
         )
 
         results = attack_handler.generate_adversarial_samples(test_loader)
@@ -245,8 +246,6 @@ class TaskHandler:
         )
         logging.info(
             f"Adversarial samples visualized for {model_name_with_depth} using {self.args.attack_name}")
-
-
 
     def train_and_evaluate_model(self, model_name, dataset_name, train_loader, val_loader, test_loader, input_channels,
                                  depths, num_classes, class_names, adversarial=False):
@@ -314,4 +313,3 @@ class TaskHandler:
             models[depth] = (model, trainer)
 
         return models
-

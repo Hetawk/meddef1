@@ -1,22 +1,21 @@
-# attacker.py
 import logging
 import torch
 
 from gan.attack.attack_loader import AttackLoader
 
 class AttackHandler:
-    def __init__(self, model, attack_name, **attack_params):
+    def __init__(self, model, attack_name, args):
         """
         Initialize the AttackHandler with a model, attack name, and parameters.
 
         Args:
             model (torch.nn.Module): The target model to be attacked.
             attack_name (str): Name of the attack to use (e.g., 'fgsm', 'pgd').
-            attack_params (dict): Parameters for the attack (e.g., epsilon for FGSM).
+            args (argparse.Namespace): Parsed command-line arguments.
         """
         self.device = next(model.parameters()).device
-        self.attack_loader = AttackLoader(model)
-        self.attack = self.attack_loader.get_attack(attack_name, **attack_params)
+        self.attack_loader = AttackLoader(model, args)
+        self.attack = self.attack_loader.get_attack(attack_name)
 
     def generate_adversarial_samples(self, data_loader):
         """

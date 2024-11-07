@@ -24,7 +24,6 @@ def get_args():
     parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float, metavar='W', help='weight decay (default: 1e-4)')
     parser.add_argument('--patience', default=5, type=int, metavar='N', help='patience for early stopping')
     parser.add_argument('--lambda_l2', default=0.01, type=float, metavar='L2', help='L2 regularization lambda')
-    parser.add_argument('--alpha', default=0.01, type=float, metavar='Alpha', help='Alpha value for adversarial training')
     parser.add_argument('--accumulation_steps', default=1, type=int, help='Number of gradient accumulation steps')
 
     # Checkpoints
@@ -51,6 +50,8 @@ def get_args():
     # Attack options
     parser.add_argument('--attack_name', type=str, default='fgsm', help='Name of the attack to use (e.g., fgsm, pgd)')
     parser.add_argument('--epsilon', type=float, default=0.3, help='Epsilon value for the attack')
+    parser.add_argument('--alpha', default=0.01, type=float, metavar='Alpha', help='Alpha value for adversarial training')
+    parser.add_argument('--iterations', default=40, type=int, metavar='N', help='Number of iterations for the attack')
 
     # Defense options
     parser.add_argument('--prune_rate', type=float, default=0.2, help='Pruning rate for unstructured pruning')

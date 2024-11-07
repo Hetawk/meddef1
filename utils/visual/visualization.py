@@ -1,13 +1,15 @@
-# visualization.py
-
 from .attack.adversarial_examples import save_adversarial_examples
 from .attack.perturbation_visualization import save_perturbation_visualization
 from .train.class_distribution import save_class_distribution
 from .train.confusion_matrix import save_confusion_matrix
 from .train.precision_recall_curve import save_precision_recall_curve
+from .train.precision_recall_auc import save_precision_recall_auc
+from .train.roc_auc import save_roc_auc
+from .train.roc_curve import save_roc_curve
+from .train.training_validation_loss_accuracy import save_training_validation_loss_accuracy
+from .train.heatmaps import save_heatmap
 from .defense.robustness_evaluation import save_defense_robustness_plot
 from .defense.perturbation_analysis import save_perturbation_analysis_plot
-from .train.training_validation_loss_accuracy import load_and_visualize_training_results
 import matplotlib.pyplot as plt
 import os
 
@@ -22,7 +24,8 @@ class Visualization:
         if len(data) == 3:
             true_labels_dict, predictions_dict, history = data
             # Proceed with visualization that requires history
-            load_and_visualize_training_results(task_name, dataset_name)
+            for model_name in models:
+                save_training_validation_loss_accuracy(task_name, dataset_name, model_name)
         elif len(data) == 2:
             true_labels_dict, predictions_dict = data
 
@@ -34,7 +37,12 @@ class Visualization:
         # Visualization that does not require history
         save_confusion_matrix(models, true_labels_dict, predictions_dict, class_names, task_name, dataset_name)
         save_precision_recall_curve(models, true_labels_dict, predictions_dict, class_names, task_name, dataset_name)
+        save_precision_recall_auc(models, true_labels_dict, predictions_dict, class_names, task_name, dataset_name)
+        save_roc_auc(models, true_labels_dict, predictions_dict, class_names, task_name, dataset_name)
+        save_roc_curve(models, true_labels_dict, predictions_dict, class_names, task_name, dataset_name)
         save_class_distribution(true_labels_dict, class_names, task_name, dataset_name)
+        for model_name in models:
+            save_training_validation_loss_accuracy(task_name, dataset_name, model_name)
 
     def visualize_attack(self, original, adversarial, labels, model_name_with_depth, task_name, dataset_name, attack_name):
         adv_examples = (original, adversarial, labels)
@@ -50,4 +58,3 @@ class Visualization:
 
         # Save perturbation analysis plot
         save_perturbation_analysis_plot(perturbations, class_names, dataset_name, task_name)
-

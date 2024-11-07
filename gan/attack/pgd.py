@@ -1,3 +1,5 @@
+# pgd.py
+
 import torch
 import torch.nn as nn
 import logging
@@ -35,4 +37,4 @@ class PGDAttack:
 
             perturbed_images.requires_grad = True  # Ensure gradients are calculated in the next iteration
 
-        return perturbed_images
+        return images.detach(), perturbed_images.detach(), labels.detach()

@@ -3,7 +3,7 @@ import torch.nn as nn
 import logging
 
 class FGSMAttack:
-    def __init__(self, model, epsilon=0.3, targeted=False):
+    def __init__(self, model, epsilon, targeted=False):
         self.model = model
         self.epsilon = epsilon
         self.targeted = targeted
