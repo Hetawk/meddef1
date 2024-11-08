@@ -5,8 +5,10 @@ import logging
 from model.backbone.cbam.resnet_cbam import get_resnet_with_cbam
 from model.backbone.resnet import get_resnet
 from model.densenet_model import get_densenet
+from model.meddef.meddef import get_meddef
 from model.vgg_model import get_vgg
 from model.attention.MSARNet import MSARNet
+
 
 class ModelLoader:
     def __init__(self, device, arch, pretrained=True):
@@ -20,7 +22,9 @@ class ModelLoader:
             'densenet': {'func': get_densenet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'vgg': {'func': get_vgg, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'msarnet': {'func': MSARNet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
-            'rcbam': {'func': get_resnet_with_cbam, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']}
+            'cbam_resnet': {'func': get_resnet_with_cbam, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
+            'meddef': {'func': get_meddef, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']}
+
         }
         logging.info("ModelLoader initialized with models: " + ", ".join(self.models_dict.keys()))
 

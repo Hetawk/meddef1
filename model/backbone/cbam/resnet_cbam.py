@@ -92,7 +92,7 @@ def get_resnet_with_cbam(depth: int, input_channels: int = 3, num_classes: int =
         152: (CBAMBottleneckBlock, (3, 8, 36, 3)),
     }
     if depth not in depth_to_block_layers:
-        raise ValueError(f"Unsupported rcbam depth: {depth}")
+        raise ValueError(f"Unsupported cbam_resnet depth: {depth}")
 
     block, layers = depth_to_block_layers[depth]
     return ResNetModelWithCBAM(block, layers, num_classes=num_classes, input_channels=input_channels,
