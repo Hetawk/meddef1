@@ -13,8 +13,6 @@ from loader.dataset_loader import DatasetLoader
 from train import Trainer
 from utils.ensemble import Ensemble
 from utils.evaluator import Evaluator
-from utils.robustness.cross_validation import CrossValidator
-from utils.visual.normal_visual import visualize_all
 from utils.visual.visualization import Visualization
 
 class TaskHandler:
@@ -38,16 +36,6 @@ class TaskHandler:
         self.device = args.device
         self.trained_models = {}
         self.num_classes = num_classes
-
-        # Initialize AdversarialExampleGenerator with the required model argument
-        model, _ = self.models_loader.get_model(model_name=args.arch[0], depth=args.depth[args.arch[0]][0],
-                                                input_channels=input_channels_dict[dataset_name],
-                                                num_classes=num_classes)
-        self.adversarial_example_generator = AdversarialExampleGenerator(noise_dim=100,
-                                                                         data_dim=input_channels_dict[dataset_name],
-                                                                         device=device,
-                                                                         model=model,
-                                                                         args=args)
 
     def run_train(self):
         """Runs the training process for the specified dataset and models."""
@@ -122,9 +110,18 @@ class TaskHandler:
                     original_data.append(data)
                 original_data = torch.cat(original_data, dim=0)
 
-                adversarial_examples = self.adversarial_example_generator.generate_adversarial_examples(
+                # Initialize AdversarialExampleGenerator
+                adversarial_example_generator = AdversarialExampleGenerator(
+                    noise_dim=100,
+                    data_dim=input_channels,
+                    device=self.device,
+                    model=model,
+                    args=self.args
+                )
+
+                adversarial_examples = adversarial_example_generator.generate_adversarial_examples(
                     len(original_data))
-                self.adversarial_example_generator.visualize_adversarial_examples(
+                adversarial_example_generator.visualize_adversarial_examples(
                     original_data, adversarial_examples, model_name_with_depth, self.current_task,
                     dataset_name, 'gan_attack'
                 )
@@ -134,6 +131,7 @@ class TaskHandler:
             model_names_list, (true_labels_dict, predictions_dict), self.current_task, dataset_name,
             self.classes[dataset_name]
         )
+
 
     def run_defense(self):
         self.current_task = 'defense'
