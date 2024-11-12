@@ -1,22 +1,34 @@
-# def_distill.py
 import torch
+import torch.nn.functional as F
+import logging
 
 class DefDistill:
-    def __init__(self, model):
-        self.model = model
+    def __init__(self, teacher_model, student_model, temperature=10.0):
+        self.teacher_model = teacher_model
+        self.student_model = student_model
+        self.temperature = temperature
 
-    def defend(self, adv_examples, adv_labels):
+    def distillation_loss(self, student_outputs, teacher_outputs):
         """
-        Apply distillation-based defense to adversarial examples.
+        Compute the distillation loss between the student and teacher outputs.
         """
-        distillation_loss = torch.nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-3)
+        teacher_outputs = F.softmax(teacher_outputs / self.temperature, dim=1)
+        student_outputs = F.log_softmax(student_outputs / self.temperature, dim=1)
+        loss = F.kl_div(student_outputs, teacher_outputs, reduction='batchmean') * (self.temperature ** 2)
+        return loss
 
-        self.model.train()
-        optimizer.zero_grad()
-        outputs = self.model(adv_examples)
-        loss = distillation_loss(outputs, adv_labels)
-        loss.backward()
-        optimizer.step()
+    def distill(self, inputs):
+        """
+        Perform distillation on the given inputs.
+        """
+        self.teacher_model.eval()
+        self.student_model.eval()
 
-        return self.model, None  # Adjust as needed for evaluation
+        with torch.no_grad():
+            teacher_outputs = self.teacher_model(inputs)
+
+        student_outputs = self.student_model(inputs)
+        loss = self.distillation_loss(student_outputs, teacher_outputs)
+
+        logging.info(f'Distillation loss: {loss.item():.4f}')
+        return loss

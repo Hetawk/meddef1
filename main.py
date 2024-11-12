@@ -14,6 +14,8 @@ from utils.robustness.lr_scheduler import LRSchedulerLoader
 from utils.robustness.cross_validation import CrossValidator
 from arg_parser import get_args
 
+
+
 def setup_environment(args):
     print("Torch version: ", torch.__version__)
     print("Torchvision version: ", torchvision.__version__)
@@ -149,6 +151,7 @@ def process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_
             else:
                 logging.error(f"Unknown task: {args.task_name}. No task was executed.")
 
+
 def main():
     args = get_args()
     setup_environment(args)
@@ -160,6 +163,8 @@ def main():
         for arch in args.arch:
             models_dict.arch = arch
             process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_dict, lr_scheduler_loader, hyperparams)
+
+
 
 if __name__ == "__main__":
     main()

@@ -8,6 +8,7 @@ from model.densenet_model import get_densenet
 from model.meddef.meddef import get_meddef
 from model.vgg_model import get_vgg
 from model.attention.MSARNet import MSARNet
+from model.attention.self_resnet import get_resnetse
 
 
 class ModelLoader:
@@ -23,7 +24,8 @@ class ModelLoader:
             'vgg': {'func': get_vgg, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'msarnet': {'func': MSARNet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'cbam_resnet': {'func': get_resnet_with_cbam, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
-            'meddef': {'func': get_meddef, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']}
+            'meddef': {'func': get_meddef, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
+            'resnetse': {'func': get_resnetse, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']}
 
         }
         logging.info("ModelLoader initialized with models: " + ", ".join(self.models_dict.keys()))

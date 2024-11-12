@@ -7,7 +7,7 @@ def get_args():
     parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 
     # Datasets
-    parser.add_argument('-d', '--data', nargs='+', default=['scisic'], type=str)
+    parser.add_argument('-d', '--data', nargs='+', default=['ccts'], type=str)
     parser.add_argument('-j', '--workers', default=8, type=int, metavar='N',
                         help='number of data loading workers (default: 4)')
     parser.add_argument('--data_dir', default='./dataset', type=str, metavar='PATH', help='path to dataset')

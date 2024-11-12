@@ -17,20 +17,20 @@ class SelfAttention(BaseAttention):
         assert key.dim() == 3, f"Expected key to have 3 dimensions, got {key.dim()}"
         assert value.dim() == 3, f"Expected value to have 3 dimensions, got {value.dim()}"
 
-        # Print original shapes
-        print(f"SelfAttention: Original query shape: {query.shape}")
-        print(f"SelfAttention: Original key shape: {key.shape}")
-        print(f"SelfAttention: Original value shape: {value.shape}")
+        # # Print original shapes
+        # print(f"SelfAttention: Original query shape: {query.shape}")
+        # print(f"SelfAttention: Original key shape: {key.shape}")
+        # print(f"SelfAttention: Original value shape: {value.shape}")
 
         # Linear transformations
         query_transformed = self.wq(query)  # Shape: (batch_size, seq_len, query_dim)
         key_transformed = self.wk(key)      # Shape: (batch_size, seq_len, key_dim)
         value_transformed = self.wv(value)  # Shape: (batch_size, seq_len, value_dim)
 
-        # Print transformed shapes
-        print(f"SelfAttention: Transformed query shape: {query_transformed.shape}")
-        print(f"SelfAttention: Transformed key shape: {key_transformed.shape}")
-        print(f"SelfAttention: Transformed value shape: {value_transformed.shape}")
+        # # Print transformed shapes
+        # print(f"SelfAttention: Transformed query shape: {query_transformed.shape}")
+        # print(f"SelfAttention: Transformed key shape: {key_transformed.shape}")
+        # print(f"SelfAttention: Transformed value shape: {value_transformed.shape}")
 
         # Split heads
         query = self.split_heads(query_transformed, batch_size)  # Shape: (batch_size, num_heads, seq_len, depth)

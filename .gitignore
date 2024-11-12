@@ -11,6 +11,7 @@ dataset/
 oooooout/
 out/
 out_ref/
+philip/
 data/
 .idea
 meddef.zip
@@ -178,3 +179,5 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 .DS_Store
+data/
+philip/
