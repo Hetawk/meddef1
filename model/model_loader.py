@@ -33,7 +33,6 @@ class ModelLoader:
         """Finds the most recent checkpoint for the given model and dataset."""
         logging.info("get_latest_checkpoint called")
         checkpoint_dir = f"out/{task_name}/{dataset_name}/{model_name_with_depth}/save_model"
-        logging.info(f"Looking for checkpoints in directory: {checkpoint_dir}")
 
         if not os.path.exists(checkpoint_dir):
             logging.warning(f"Checkpoint directory {checkpoint_dir} does not exist.")

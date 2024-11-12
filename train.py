@@ -7,6 +7,7 @@ import numpy as np
 import random
 from torch.cuda.amp import GradScaler, autocast
 from gan.defense.adv_train import AdversarialTraining
+from training_logger import TrainingLogger
 from utils.robustness.regularization import Regularization
 from utils.timer import Timer
 from utils.algorithms.supervised import SupervisedLearning
@@ -63,6 +64,9 @@ class Trainer:
 
         # Set random seed for reproducibility
         self.set_random_seed(args.manualSeed)
+        # Initialize TrainingLogger
+        self.training_logger = TrainingLogger()
+
 
     def set_random_seed(self, seed):
         random.seed(seed)
@@ -174,6 +178,22 @@ class Trainer:
 
             if self.cross_validator:
                 self.cross_validator.run()
+
+            # Log training information after each epoch
+            metrics = {
+                'loss': epoch_loss,
+                'accuracy': accuracy,
+                'val_loss': val_loss,
+                'val_accuracy': val_accuracy
+            }
+            test_loss, test_accuracy = self.test()
+            test_metrics = {
+                'test_loss': test_loss,
+                'test_accuracy': test_accuracy
+            }
+            self.training_logger.log_training_info(self.task_name, self.model_name, self.dataset_name, vars(self.args),
+                                                   metrics, start_time, end_time, test_metrics)
+
         logging.info(f"Finished training {self.model_name}.")
         self.test()
         self.save_history_to_csv("training_history.csv")
@@ -218,6 +238,7 @@ class Trainer:
         self.history['true_labels'][-1] = self.true_labels
         self.history['predictions'][-1] = self.predictions  # Store logits, not predicted labels
         self.model.train()
+        return test_loss, accuracy
 
     def save_model(self, path):
         filename, ext = os.path.splitext(path)
