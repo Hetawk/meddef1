@@ -75,6 +75,9 @@ class Trainer:
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
 
+    def get_model_params(self):
+        return sum(p.numel() for p in self.model.parameters()) / 1000000.0
+
     def train(self, patience, adversarial=False):
         if self.has_trained:
             logging.warning(f"{self.model} has already been trained. Training again will overwrite the existing model.")
@@ -92,6 +95,7 @@ class Trainer:
         patience_counter = 0
         total_batches = len(self.train_loader)
         log_points = [0, total_batches // 2, total_batches - 1]
+        initial_params = self.get_model_params()
 
         for epoch in range(self.epochs):
             epoch_loss = 0.0
@@ -191,8 +195,9 @@ class Trainer:
                 'test_loss': test_loss,
                 'test_accuracy': test_accuracy
             }
+            final_params = self.get_model_params()
             self.training_logger.log_training_info(self.task_name, self.model_name, self.dataset_name, vars(self.args),
-                                                   metrics, start_time, end_time, test_metrics)
+                                                   metrics, start_time, end_time, test_metrics, initial_params, final_params)
 
         logging.info(f"Finished training {self.model_name}.")
         self.test()

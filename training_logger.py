@@ -9,7 +9,7 @@ class TrainingLogger:
         self.log_dir = log_dir
         os.makedirs(log_dir, exist_ok=True)
 
-    def log_training_info(self, task_name, model_name, dataset_name, hyperparams, metrics, start_time, end_time, test_metrics):
+    def log_training_info(self, task_name, model_name, dataset_name, hyperparams, metrics, start_time, end_time, test_metrics, initial_params, final_params):
         log_dir = os.path.join(self.log_dir, task_name, dataset_name, model_name)
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, "summary_training_log.txt")
@@ -28,6 +28,8 @@ class TrainingLogger:
             f.write("\nTest Metrics:\n")
             for key, value in test_metrics.items():
                 f.write(f"{key}: {value}\n")
+            f.write(f"\nInitial Parameters: {initial_params:.2f}M\n")
+            f.write(f"Final Parameters: {final_params:.2f}M\n")
             f.write("\n" + "-"*50 + "\n")
 
     def log_metrics(self, task_name, model_name, dataset_name, metrics):
