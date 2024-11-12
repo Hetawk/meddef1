@@ -1,5 +1,3 @@
-# train.py is a module for training models.
-
 import os
 import logging
 from datetime import datetime
@@ -223,9 +221,10 @@ class Trainer:
 
     def save_model(self, path):
         filename, ext = os.path.splitext(path)
-        # Include epochs, learning rate, and batch size in the filename
-        filename = f"{filename}_epochs{self.epochs}_lr{self.args.lr}_batch{self.args.train_batch}{ext}"
-        path = os.path.join('out', self.task_name, self.dataset_name,self.model_name, filename)
+        # Include epochs, learning rate, batch size, and timestamp in the filename
+        timestamp = datetime.now().strftime("%Y%m%d")
+        filename = f"{filename}_epochs{self.epochs}_lr{self.args.lr}_batch{self.args.train_batch}_{timestamp}{ext}"
+        path = os.path.join('out', self.task_name, self.dataset_name, self.model_name, filename)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save(self.model.state_dict(), path)
         logging.info(f'Model saved to {path}')
