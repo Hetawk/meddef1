@@ -1,4 +1,4 @@
-# train.py
+# train.py is a module for training models.
 
 import os
 import logging

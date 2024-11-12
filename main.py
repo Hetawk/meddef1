@@ -1,3 +1,5 @@
+# main.py is teh main script in our code, it uses the argparse library to parse command-line arguments. It then uses the parsed arguments to set up the environment, load datasets, models, optimizers, and learning rate schedulers, and run the specified task.
+
 import logging
 import random
 import sys

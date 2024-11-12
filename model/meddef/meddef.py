@@ -1,4 +1,4 @@
-# meddef.py
+# meddef.py is a module for MedDef models.
 
 import torch
 from torch import nn

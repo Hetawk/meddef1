@@ -1,3 +1,5 @@
+# def_distill.py: Distillation defense for GANs.
+
 import torch
 import torch.nn.functional as F
 import logging

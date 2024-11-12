@@ -1,3 +1,5 @@
+# self_attention.py is a module for self-attention mechanism.
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

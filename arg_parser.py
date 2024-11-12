@@ -1,3 +1,5 @@
+# arg_parser.py
+
 import argparse
 import os
 import torch
@@ -79,3 +81,4 @@ def get_args():
     args.device = torch.device(f"cuda:{args.device_index}" if use_cuda else "cpu")
 
     return args
+

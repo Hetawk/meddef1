@@ -1,3 +1,4 @@
+# logger.py is a module for setting up a logger that logs messages to both the console and a file. The setup_logger function initializes a custom logger with a given log file path. It creates a directory for the log file if it does not exist and sets up handlers for logging to the console and the file. The log messages include the timestamp, log level, and message content.
 
 import os
 import logging
