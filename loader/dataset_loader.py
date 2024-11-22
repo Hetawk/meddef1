@@ -57,6 +57,9 @@ class DatasetLoader:
             # 'tbcr': self.load_tbcr,
             'scisic': self.load_scisic,
             'rotc': self.load_rotc,
+            'kvasir': self.load_kvasir,
+            'dermnet': self.load_dermnet,
+            'chest_xray': self.load_chest_xray
 
             # Add more datasets here...
         }
@@ -112,20 +115,32 @@ class DatasetLoader:
         except KeyError:
             raise ValueError(f"Dataset {self.dataset_name} not recognized.")
 
-    # # Dataset #1: MNIST
-    # def load_mnist(self):
-    #     """
-    #     Loads the MNIST dataset and returns DataLoaders for the training, validation, and test datasets.
-    #
-    #     """
-    #     mnist_train = datasets.MNIST(os.path.join(self.data_dir, 'mnist'), train=True, download=True)
-    #     mnist_test = datasets.MNIST(os.path.join(self.data_dir, 'mnist'), train=False, download=True)
-    #     train_dataset, val_dataset, _ = self.split_dataset(mnist_train)
-    #
-    #     return train_dataset, val_dataset, mnist_test, mnist_train.classes
+    def check_for_corrupted_images(self, directory, transform):
+        """
+        Fix truncated images
+        Checks for corrupted images in the specified directory.
 
+        Args:
+            directory (str): The directory to check for corrupted images.
+            transform (callable): The transform to apply to the images.
+        """
+        for root, _, files in os.walk(directory):
+            for file in files:
+                if file.endswith(('jpg', 'jpeg', 'png')):
+                    try:
+                        img_path = os.path.join(root, file)
+                        img = Image.open(img_path)
+                        img = transform(img)
+                    except Exception as e:
+                        logging.error(f"Corrupted image file: {img_path} - {e}")
     # Dataset #3: scisic
     def load_scisic(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
+        """
+        Skin Cancer ISIC
+        https://www.kaggle.com/datasets/nodoubttome/skin-cancer9-classesisic
+        Loads the SCISIC dataset and returns DataLoaders for the training, validation, and test datasets.
+
+        """
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         data_transforms = {
             'train': transforms.Compose([
@@ -152,6 +167,10 @@ class DatasetLoader:
         train_dir = os.path.join(self.data_dir, 'scisic', 'Train')
         test_dir = os.path.join(self.data_dir, 'scisic', 'Test')
 
+        # Check for corrupted images in the training directory
+        self.check_for_corrupted_images(train_dir, data_transforms['train'])
+        self.check_for_corrupted_images(test_dir, data_transforms['test'])
+
         full_dataset = ImageFolder(train_dir, data_transforms['train'])
         train_dataset, val_dataset, _ = self.split_dataset(full_dataset)
         test_dataset = ImageFolder(test_dir, data_transforms['test'])
@@ -166,9 +185,108 @@ class DatasetLoader:
 
         return train_loader, val_loader, test_loader
 
+    def load_kvasir(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
+        """
+        Kvasir Dataset for Classification and Segmentation
+        https://www.kaggle.com/datasets/abdallahwagih/kvasir-dataset-for-classification-and-segmentation
+        Loads the Kvasir dataset and returns DataLoaders for the training, validation, and test datasets.
+        """
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        data_transforms = {
+            'train': transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.CenterCrop(256),
+                transforms.RandomCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+            'val': transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.CenterCrop(256),
+                transforms.RandomCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+            'test': transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+        }
+
+        train_dir = os.path.join(self.data_dir, 'kvasir', 'train')
+
+        # Check for corrupted images in the training directory
+        self.check_for_corrupted_images(train_dir, data_transforms['train'])
+
+        full_dataset = ImageFolder(train_dir, data_transforms['train'])
+        train_dataset, val_dataset, test_dataset = self.split_dataset(full_dataset)
+
+        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, full_dataset)
+        train_loader = torch.utils.data.DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
+                                                   num_workers=num_workers, pin_memory=pin_memory)
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers,
+                                                 pin_memory=pin_memory)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=test_batch_size, num_workers=num_workers,
+                                                  pin_memory=pin_memory)
+
+        return train_loader, val_loader, test_loader
+
+    def load_dermnet(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
+        """
+        Dermnet
+        https://www.kaggle.com/datasets/shubhamgoel27/dermnet
+        Loads the Dermnet dataset and returns DataLoaders for the training, validation, and test datasets.
+
+        """
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        data_transforms = {
+            'train': transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.CenterCrop(256),
+                transforms.RandomCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+            'val': transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.CenterCrop(256),
+                transforms.RandomCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+            'test': transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+        }
+
+        train_dir = os.path.join(self.data_dir, 'dermnet', 'train')
+        test_dir = os.path.join(self.data_dir, 'dermnet', 'test')
+
+        # Check for corrupted images in the training directory
+        self.check_for_corrupted_images(train_dir, data_transforms['train'])
+        self.check_for_corrupted_images(test_dir, data_transforms['test'])
+
+        full_dataset = ImageFolder(train_dir, data_transforms['train'])
+        train_dataset, val_dataset, _ = self.split_dataset(full_dataset)
+        test_dataset = ImageFolder(test_dir, data_transforms['test'])
+
+        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, full_dataset)
+        train_loader = torch.utils.data.DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
+                                                   num_workers=num_workers, pin_memory=pin_memory)
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers,
+                                                 pin_memory=pin_memory)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=test_batch_size, num_workers=num_workers,
+                                                  pin_memory=pin_memory)
+
+        return train_loader, val_loader, test_loader
     # # Dataset #4: tbcr
     # def load_tbcr(self):
     #     """
+    #     Tuberculosis (TB) Chest X-ray Database
+    #     https://www.kaggle.com/datasets/tawsifurrahman/tuberculosis-tb-chest-xray-dataset
     #    Loads the TBCR dataset and returns DataLoaders for the training, validation, and test datasets.
     #
     #     """
@@ -230,9 +348,58 @@ class DatasetLoader:
 
         return train_loader, val_loader, test_loader
 
+    def load_chest_xray(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
+        """
+                Chest CT-Scan images Dataset
+                https://www.kaggle.com/datasets/mohamedhanyyy/chest-ctscan-images
+
+        """
+        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        data_transforms = {
+            'train': transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.CenterCrop(256),
+                transforms.RandomCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+            'val': transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.CenterCrop(256),
+                transforms.RandomCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+            'test': transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                normalize]),
+        }
+
+        train_dir = os.path.join(self.data_dir, 'chest_xray', 'train')
+        test_dir = os.path.join(self.data_dir, 'chest_xray', 'test')
+        valid_dir = os.path.join(self.data_dir, 'chest_xray', 'val')
+
+        train_dataset = ImageFolder(train_dir, data_transforms['train'])
+        test_dataset = ImageFolder(test_dir, data_transforms['test'])
+        val_dataset = ImageFolder(valid_dir, data_transforms['val'])
+
+        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, train_dataset)
+        train_loader = torch.utils.data.DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
+                                                   num_workers=num_workers, pin_memory=pin_memory)
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers,
+                                                 pin_memory=pin_memory)
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=test_batch_size, num_workers=num_workers,
+                                                  pin_memory=pin_memory)
+
+        return train_loader, val_loader, test_loader
+
     # Dataset #6: rotc
     def load_rotc(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
         """
+        Retinal OCT Images (optical coherence tomography)
+        https://www.kaggle.com/datasets/paultimothymooney/kermany2018
         Loads the ROTC dataset and returns DataLoaders for the training, validation, and test datasets.
 
         """

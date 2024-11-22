@@ -5,17 +5,17 @@ import logging
 from model.backbone.cbam.resnet_cbam import get_resnet_with_cbam
 from model.backbone.resnet import get_resnet
 from model.densenet_model import get_densenet
+from model.attention.self_resnet import get_resnetse
 from model.meddef.meddef import get_meddef
 from model.vgg_model import get_vgg
 from model.attention.MSARNet import MSARNet
-from model.attention.self_resnet import get_resnetse
+
 
 class ModelLoader:
     def __init__(self, device, arch, pretrained=True):
         self.device = device
         self.arch = arch
         self.pretrained = pretrained
-        self.loaded_models = {}
 
         # Define model architectures and their depths
         self.models_dict = {
@@ -26,33 +26,12 @@ class ModelLoader:
             'cbam_resnet': {'func': get_resnet_with_cbam, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
             'meddef': {'func': get_meddef, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
             'resnetse': {'func': get_resnetse, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']}
+
         }
         logging.info("ModelLoader initialized with models: " + ", ".join(self.models_dict.keys()))
 
-    def get_latest_checkpoint(self, model_name_with_depth, dataset_name, task_name):
-        """Finds the most recent checkpoint for the given model and dataset."""
-        logging.info("get_latest_checkpoint called")
-        checkpoint_dir = f"out/{task_name}/{dataset_name}/{model_name_with_depth}/save_model"
-
-        if not os.path.exists(checkpoint_dir):
-            logging.warning(f"Checkpoint directory {checkpoint_dir} does not exist.")
-            return None
-
-        checkpoints = [f for f in os.listdir(checkpoint_dir) if f.startswith(f"best_{model_name_with_depth}_{dataset_name}")]
-        if not checkpoints:
-            logging.warning(f"No checkpoints found in {checkpoint_dir}.")
-            return None
-
-        # Sort checkpoints by modification time
-        checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join(checkpoint_dir, x)), reverse=True)
-        latest_checkpoint = checkpoints[0]
-        checkpoint_path = os.path.join(checkpoint_dir, latest_checkpoint)
-        logging.info(f"Latest checkpoint found: {checkpoint_path}")
-        return checkpoint_path
-
-    def get_model(self, model_name=None, depth=None, input_channels=3, num_classes=None, task_name=None, dataset_name=None):
+    def get_model(self, model_name=None, depth=None, input_channels=3, num_classes=None):
         """Retrieves a model based on specified architecture, depth, and configurations."""
-        logging.info("get_model called")
         model_name = model_name or self.arch
 
         if model_name not in self.models_dict:
@@ -76,52 +55,47 @@ class ModelLoader:
         # Filter the kwargs to only include the required parameters
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in model_params}
 
-        model = None
-        model_name_with_depth = f"{model_name}{depth}" if 'depth' in model_params else model_name
-
-        # Check if a checkpoint exists
-        if task_name and dataset_name:
-            logging.info(f"Checking for checkpoint for model: {model_name_with_depth}")
-            checkpoint_path = self.get_latest_checkpoint(model_name_with_depth, dataset_name, task_name)
-            if checkpoint_path:
-                logging.info(f"Loading model from checkpoint: {checkpoint_path}")
+        if isinstance(depth, list):
+            models = {}
+            for d in depth:
+                filtered_kwargs['depth'] = d
                 model = model_func(**filtered_kwargs)
-                model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
-                logging.info(f"Loaded pretrained model from checkpoint: {checkpoint_path}")
-                self.loaded_models[model_name_with_depth] = model
-            else:
-                logging.info(f"No checkpoint found for {model_name_with_depth}. Creating a new model.")
+                model_name_with_depth = f"{model_name}{d}" if 'depth' in model_params else model_name
+                if torch.cuda.is_available():
+                    model = model.to(self.device)
+                models[d] = (model, model_name_with_depth)
+            return models
+        else:
+            model = model_func(**filtered_kwargs)
+            model_name_with_depth = f"{model_name}{depth}" if 'depth' in model_params else model_name
+            if torch.cuda.is_available():
+                model = model.to(self.device)
+            return model, model_name_with_depth
 
-        if model is None:
-            if model_name_with_depth in self.loaded_models:
-                model = self.loaded_models[model_name_with_depth]
-                logging.info(f"Using cached model: {model_name_with_depth}")
-            else:
-                model = model_func(**filtered_kwargs)
-                logging.info(f"Created a new model: {model_name_with_depth}")
-
-        if torch.cuda.is_available():
-            model = model.to(self.device)
-
-        return model, model_name_with_depth
-
-    def load_pretrained_model(self, model_name, task_name, dataset_name, depth=None, input_channels=3, num_classes=None):
+    def load_pretrained_model(self, model_name, load_task, dataset_name, depth=None, input_channels=3, num_classes=None):
         """Loads a pretrained model, specified by architecture, depth, and task-related information."""
         model, model_name_with_depth = self.get_model(
             model_name=model_name,
             depth=depth,
             input_channels=input_channels,
-            num_classes=num_classes,
-            task_name=task_name,
-            dataset_name=dataset_name
+            num_classes=num_classes
         )
 
+        model = model.to(self.device)
+
+        model_path = f"out/{load_task}/{dataset_name}/save_model/best_{model_name_with_depth}_{dataset_name}.pth"
         if torch.cuda.is_available() and torch.cuda.device_count() > 1:
             model = torch.nn.DataParallel(model)  # for multi-GPU use
 
+        if os.path.isfile(model_path):
+            model.load_state_dict(torch.load(model_path, map_location=self.device))
+            logging.info(f"Loaded pretrained model from {model_path}")
+        else:
+            raise FileNotFoundError(f"No saved model found at {model_path}")
+
         return model
 
-    def load_multiple_models(self, model_name, depths, input_channels=3, num_classes=None, task_name=None, dataset_name=None):
+    def load_multiple_models(self, model_name, depths, input_channels=3, num_classes=None):
         """Loads multiple models of the same architecture but different depths, as specified."""
         models = {}
         for depth in depths:
@@ -130,9 +104,7 @@ class ModelLoader:
                     model_name=model_name,
                     depth=depth,
                     input_channels=input_channels,
-                    num_classes=num_classes,
-                    task_name=task_name,
-                    dataset_name=dataset_name
+                    num_classes=num_classes
                 )
                 models[depth] = model
                 logging.info(f"Model {model_name_with_depth} loaded successfully.")

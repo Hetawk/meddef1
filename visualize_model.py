@@ -1,4 +1,4 @@
-# visualize_model.py is a script that visualizes the computation graph of a PyTorch model using the torchviz library. It loads a dataset and model, and then generates a random input tensor to pass through the model. The script then visualizes the computation graph of the model and saves it as a PNG file.
+# visualize_model.py
 
 import torch
 import torchvision

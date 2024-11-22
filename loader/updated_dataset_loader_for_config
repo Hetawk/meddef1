@@ -1,0 +1,134 @@
+# dataset_loader.py
+
+import os
+import logging
+import numpy as np
+import pandas as pd
+import torch
+from PIL import Image
+from torchvision.datasets import ImageFolder
+from torch.utils.data import Dataset, DataLoader, random_split, WeightedRandomSampler
+from typing import Tuple, Optional, Union, cast
+from collections.abc import Sized
+import config  # Import the configuration file
+
+class DatasetLoader:
+    _dataset_instance = None
+    pin_memory = True
+
+    def __new__(cls, dataset_name, data_dir='./dataset'):
+        if cls._dataset_instance is None:
+            cls._dataset_instance = super(DatasetLoader, cls).__new__(cls)
+            cls._dataset_instance._initialized = False
+        return cls._dataset_instance
+
+    def __init__(self, dataset_name, data_dir='./dataset'):
+        if self._initialized:
+            return
+        self.dataset_name = dataset_name
+        self.data_dir = data_dir
+        self.datasets_dict = {
+            'scisic': self.load_dataset,
+            'ccts': self.load_dataset,
+            'rotc': self.load_dataset,
+        }
+        if self.dataset_name not in self.datasets_dict:
+            raise ValueError(f"Dataset {self.dataset_name} not recognized.")
+        logging.info(f"DatasetLoader initialized for {dataset_name}.")
+        DatasetLoader._dataset_instance = self
+        self._initialized = True
+
+    def load(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
+        logging.info(f"Loading dataset: {self.dataset_name}.")
+        try:
+            return self.datasets_dict[self.dataset_name](train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory)
+        except KeyError:
+            raise ValueError(f"Dataset {self.dataset_name} not recognized.")
+
+    def load_dataset(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
+        data_transforms = config.data_transforms
+        dataset_dirs = config.dataset_dirs[self.dataset_name]
+
+        train_dir = os.path.join(self.data_dir, dataset_dirs['train'])
+        test_dir = os.path.join(self.data_dir, dataset_dirs['test'])
+        val_dir = dataset_dirs.get('val')
+
+        self.check_for_corrupted_images(train_dir, data_transforms['train'])
+        self.check_for_corrupted_images(test_dir, data_transforms['test'])
+        if val_dir:
+            self.check_for_corrupted_images(val_dir, data_transforms['val'])
+
+        full_dataset = ImageFolder(train_dir, data_transforms['train'])
+        train_dataset, val_dataset, _ = self.split_dataset(full_dataset)
+        test_dataset = ImageFolder(test_dir, data_transforms['test'])
+        if val_dir:
+            val_dataset = ImageFolder(val_dir, data_transforms['val'])
+
+        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, full_dataset)
+        train_loader = DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size, num_workers=num_workers, pin_memory=pin_memory)
+        val_loader = DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers, pin_memory=pin_memory)
+        test_loader = DataLoader(test_dataset, batch_size=test_batch_size, num_workers=num_workers, pin_memory=pin_memory)
+
+        return train_loader, val_loader, test_loader
+
+    def check_for_corrupted_images(self, directory, transform):
+        for root, _, files in os.walk(directory):
+            for file in files:
+                if file.endswith(('jpg', 'jpeg', 'png')):
+                    try:
+                        img_path = os.path.join(root, file)
+                        img = Image.open(img_path)
+                        img = transform(img)
+                    except Exception as e:
+                        logging.error(f"Corrupted image file: {img_path} - {e}")
+
+    @staticmethod
+    def split_dataset(dataset: Union[Dataset, Tuple[Dataset, ...], Sized]) -> Tuple[Optional[Dataset], Optional[Dataset], Optional[Dataset]]:
+        if dataset is None or len(dataset) == 0:
+            return None, None, None
+
+        if isinstance(dataset, tuple):
+            if all(isinstance(d, (Dataset, type(None))) for d in dataset):
+                return cast(Tuple[Optional[Dataset], Optional[Dataset], Optional[Dataset]], dataset)
+            else:
+                raise ValueError("All elements of the input tuple must be torch.utils.data.Dataset instances or None.")
+
+        train_size = int(0.7 * len(dataset))
+        val_size = int(0.15 * len(dataset))
+        test_size = len(dataset) - train_size - val_size
+
+        if train_size > 0 and val_size > 0 and test_size > 0:
+            train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
+            return train_dataset, val_dataset, test_dataset
+        else:
+            raise ValueError("Dataset is too small to be split into train, validation, and test sets with the specified proportions.")
+
+    @staticmethod
+    def get_WeightedRandom_Sampler(subset_dataset, original_dataset):
+        original_dataset = original_dataset.dataset if isinstance(original_dataset, torch.utils.data.Subset) else original_dataset
+        dataLoader = DataLoader(subset_dataset, batch_size=512)
+        All_target = [targets[i].item() for _, (_, targets) in enumerate(dataLoader) for i in range(targets.shape[0])]
+        target = np.array(All_target)
+        logging.info("\nClass distribution in the dataset:")
+        for i, class_name in enumerate(original_dataset.classes):
+            logging.info(f"{np.sum(target == i)}: {class_name}")
+        class_sample_count = np.array([len(np.where(target == t)[0]) for t in np.unique(target)])
+        weight = 1. / class_sample_count
+        samples_weight = np.array([weight[t] for t in target])
+        samples_weight = torch.from_numpy(samples_weight).double()
+        return WeightedRandomSampler(samples_weight, len(samples_weight))
+
+    @staticmethod
+    def get_dataloader_target_class_number(dataLoader):
+        if DatasetLoader._dataset_instance is None:
+            raise ValueError("DatasetLoader instance is not initialized.")
+        original_dataset = dataLoader.dataset
+        if isinstance(original_dataset, torch.utils.data.Subset):
+            original_dataset = original_dataset.dataset
+        All_target_2 = [targets[i].item() for _, (inputs, targets) in enumerate(dataLoader) for i in range(targets.shape[0])]
+        data = np.array(All_target_2)
+        unique_classes, counts = np.unique(data, return_counts=True)
+        logging.info("Unique classes and their counts in the dataset:")
+        for cls, count in zip(unique_classes, counts):
+            logging.info(f"{count}: {original_dataset.classes[cls]}")
+        return original_dataset.classes, len(unique_classes)

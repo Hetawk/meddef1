@@ -14,6 +14,8 @@ from utils.robustness.lr_scheduler import LRSchedulerLoader
 from utils.robustness.cross_validation import CrossValidator
 from arg_parser import get_args
 
+
+
 def setup_environment(args):
     print("Torch version: ", torch.__version__)
     print("Torchvision version: ", torchvision.__version__)
@@ -107,20 +109,9 @@ def process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_
 
         logging.info(f"Using depths for model {model_name}: {depths}")
         for depth in depths:
-            logging.info(f"Loading model with depth: {depth} for dataset: {dataset_name} and task: {args.task_name}")
-            model, model_name_with_depth = models_dict.get_model(
-                model_name=model_name,
-                depth=depth,
-                input_channels=3,
-                num_classes=num_classes,
-                task_name=args.task_name,
-                dataset_name=dataset_name
-            )
-            logging.info(f"Model {model_name_with_depth} loaded successfully")
-
             cross_validator = CrossValidator(
                 dataset=train_loader.dataset,
-                model=model,
+                model=models_dict.models_dict[model_name],
                 model_name=model_name,
                 dataset_name=dataset_name,
                 criterion=nn.CrossEntropyLoss(),
@@ -160,6 +151,7 @@ def process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_
             else:
                 logging.error(f"Unknown task: {args.task_name}. No task was executed.")
 
+
 def main():
     args = get_args()
     setup_environment(args)
@@ -171,6 +163,8 @@ def main():
         for arch in args.arch:
             models_dict.arch = arch
             process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_dict, lr_scheduler_loader, hyperparams)
+
+
 
 if __name__ == "__main__":
     main()

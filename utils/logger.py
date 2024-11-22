@@ -27,7 +27,7 @@ def setup_logger(log_file):
     f_handler.setFormatter(formatter)
 
     # Add handlers to the logger
-    logger.addHandler(c_handler)
+    logger.addHandler(c_handler) 
     logger.addHandler(f_handler)
 
     logger.info("Logger initialized.")
