@@ -48,7 +48,7 @@ def get_args():
                         help='evaluate model on validation set')
     parser.add_argument('--pretrained', dest='pretrained', default=True, action='store_true',
                         help='use pre-trained model')
-    parser.add_argument('--pin-memory', action='store_true', help='Use pinned memory for data loading')
+    parser.add_argument('--pin-memory', action='store_false', help='Use pinned memory for data loading')
 
     # Device options
     parser.add_argument('--gpu-ids', default='3,2,1', type=str, help='id(s) for CUDA_VISIBLE_DEVICES')

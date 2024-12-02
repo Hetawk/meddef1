@@ -8,11 +8,16 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 def plot_roc_auc(model_name, true_labels, predictions, class_names=None, dataset_name=''):
+    # Generate default class names based on unique classes
+    unique_classes = np.unique(true_labels)
+    class_names = [str(i) for i in unique_classes]
     n_classes = len(class_names)
+
     fig, ax = plt.subplots(figsize=(10, 8))
 
-    true_labels_bin = label_binarize(true_labels, classes=[i for i in range(n_classes)])
-    logging.info(f'Binarized true labels shape: {true_labels_bin.shape}')
+    # Binarize the true labels
+    true_labels_bin = label_binarize(true_labels, classes=unique_classes)
+    # logging.info(f'Binarized true labels shape: {true_labels_bin.shape}')
 
     predictions = np.array(predictions, dtype=float)
 

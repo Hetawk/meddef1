@@ -4,14 +4,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 
-# Mapping from long class names to shorter names for CCTS dataset
-ccts_class_name_mapping = {
-    'adenocarcinoma_left.lower.lobe_T2_N0_M0_Ib': 'class 0',
-    'large.cell.carcinoma_left.hilum_T2_N2_M0_IIIa': 'class 1',
-    'normal': 'class 2',
-    'squamous.cell.carcinoma_left.hilum_T1_N2_M0_IIIa': 'class 3'
-}
-
 def plot_confusion_matrix(model_name, true_labels, predictions, class_names=None, dataset_name=''):
     # Convert logits to predicted class indices
     if isinstance(predictions[0], list):
@@ -24,17 +16,9 @@ def plot_confusion_matrix(model_name, true_labels, predictions, class_names=None
     # Generate the confusion matrix
     conf_matrix = confusion_matrix(true_labels, predictions)
 
-    # If class_names is not provided, generate default class names
+    # Generate default class names based on unique classes
     unique_classes = np.union1d(true_labels, predictions)
-    if class_names is None:
-        class_names = [f'class {i}' for i in unique_classes]
-    else:
-        # Check if the dataset is CCTS and map the original class names to shorter names
-        if dataset_name.lower() == 'ccts':
-            class_names = [ccts_class_name_mapping.get(name, name) for name in class_names]
-        # Check if the dataset is SCISIC and apply simple class names
-        elif dataset_name.lower() == 'scisic':
-            class_names = [f'class {i}' for i in unique_classes]
+    class_names = [str(i) for i in unique_classes]
 
     # Ensure the number of class names matches the number of unique classes
     if len(class_names) != len(unique_classes):
@@ -57,7 +41,7 @@ def plot_confusion_matrix(model_name, true_labels, predictions, class_names=None
     ]
     figs = []
     for title, normalize in titles_options:
-        fig, ax = plt.subplots()
+        fig, ax = plt.subplots(figsize=(10, 10))
         disp = ConfusionMatrixDisplay(confusion_matrix=conf_matrix, display_labels=class_names)
         disp.plot(cmap='Blues', ax=ax, values_format='.2f' if normalize else 'd')
         ax.set_title(title)

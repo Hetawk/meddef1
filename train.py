@@ -1,5 +1,3 @@
-# train.py
-
 import os
 import logging
 from datetime import datetime
@@ -9,6 +7,7 @@ import numpy as np
 import random
 from torch.cuda.amp import GradScaler, autocast
 from gan.defense.adv_train import AdversarialTraining
+from training_logger import TrainingLogger
 from utils.robustness.regularization import Regularization
 from utils.timer import Timer
 from utils.algorithms.supervised import SupervisedLearning
@@ -65,6 +64,9 @@ class Trainer:
 
         # Set random seed for reproducibility
         self.set_random_seed(args.manualSeed)
+        # Initialize TrainingLogger
+        self.training_logger = TrainingLogger()
+
 
     def set_random_seed(self, seed):
         random.seed(seed)
@@ -72,6 +74,9 @@ class Trainer:
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
+
+    def get_model_params(self):
+        return sum(p.numel() for p in self.model.parameters()) / 1000000.0
 
     def train(self, patience, adversarial=False):
         if self.has_trained:
@@ -90,6 +95,7 @@ class Trainer:
         patience_counter = 0
         total_batches = len(self.train_loader)
         log_points = [0, total_batches // 2, total_batches - 1]
+        initial_params = self.get_model_params()
 
         for epoch in range(self.epochs):
             epoch_loss = 0.0
@@ -176,6 +182,23 @@ class Trainer:
 
             if self.cross_validator:
                 self.cross_validator.run()
+
+            # Log training information after each epoch
+            metrics = {
+                'loss': epoch_loss,
+                'accuracy': accuracy,
+                'val_loss': val_loss,
+                'val_accuracy': val_accuracy
+            }
+            test_loss, test_accuracy = self.test()
+            test_metrics = {
+                'test_loss': test_loss,
+                'test_accuracy': test_accuracy
+            }
+            final_params = self.get_model_params()
+            self.training_logger.log_training_info(self.task_name, self.model_name, self.dataset_name, vars(self.args),
+                                                   metrics, start_time, end_time, test_metrics, initial_params, final_params)
+
         logging.info(f"Finished training {self.model_name}.")
         self.test()
         self.save_history_to_csv("training_history.csv")
@@ -220,13 +243,14 @@ class Trainer:
         self.history['true_labels'][-1] = self.true_labels
         self.history['predictions'][-1] = self.predictions  # Store logits, not predicted labels
         self.model.train()
+        return test_loss, accuracy
 
     def save_model(self, path):
-        timestamp = datetime.now().strftime("%Y%m%d")
         filename, ext = os.path.splitext(path)
-        # Include epochs, learning rate, and batch size in the filename
+        # Include epochs, learning rate, batch size, and timestamp in the filename
+        timestamp = datetime.now().strftime("%Y%m%d")
         filename = f"{filename}_epochs{self.epochs}_lr{self.args.lr}_batch{self.args.train_batch}_{timestamp}{ext}"
-        path = os.path.join('out', self.task_name, self.dataset_name,self.model_name, filename)
+        path = os.path.join('out', self.task_name, self.dataset_name, self.model_name, filename)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save(self.model.state_dict(), path)
         logging.info(f'Model saved to {path}')
