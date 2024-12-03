@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch.hub import load_state_dict_from_url
 from typing import Type, Tuple, Dict, Union, Optional
 from model.attention.base_robust_method import BaseRobustMethod
-from model.attention.base.self_attention import SelfAttention  # Import the SelfAttention class
+from model.attention.base.self_attention import SelfAttention
 
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
@@ -176,7 +176,7 @@ def check_num_classes(func):
     return wrapper
 
 @check_num_classes
-def get_resnetse(depth: int, pretrained: bool = False, input_channels: int = 3, num_classes: int = None,
+def get_resnetsa(depth: int, pretrained: bool = False, input_channels: int = 3, num_classes: int = None,
                  robust_method: Optional[BaseRobustMethod] = None) -> ResNetModel:
     depth_to_block_layers = {
         18: (BasicBlock, (2, 2, 2, 2)),
@@ -186,7 +186,7 @@ def get_resnetse(depth: int, pretrained: bool = False, input_channels: int = 3, 
         152: (Bottleneck, (3, 8, 36, 3)),
     }
     if depth not in depth_to_block_layers:
-        raise ValueError(f"Unsupported ResNet depth: {depth}")
+        raise ValueError(f"Unsupported ResNetSA depth: {depth}")
 
     block, layers = depth_to_block_layers[depth]
     return ResNetModel(block, layers, num_classes=num_classes, pretrained=pretrained, input_channels=input_channels,

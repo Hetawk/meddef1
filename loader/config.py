@@ -46,7 +46,22 @@ dataset_dirs = {
         'train': 'rotc/train',
         'val': 'rotc/val',
         'test': 'rotc/test'
+    },
+    'kvasir': {
+        'train': 'kvasir/train',
+    },
+    'dermnet': {
+        'train': 'dermnet/train',
+        'test': 'dermnet/test'
+    },
+    'chest_xray': {
+        'train': 'chest_xray/train',
+        'val': 'chest_xray/val',
+        'test': 'chest_xray/test'
+    },
+    'tbcr':{
+        'train': 'tbcr/placeholder',
+        'val': 'tbcr/placeholder',
+        'test': 'tbcr/placeholder'
     }
 }
-
-

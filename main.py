@@ -109,9 +109,20 @@ def process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_
 
         logging.info(f"Using depths for model {model_name}: {depths}")
         for depth in depths:
+
+            # Load the model from checkpoint if available, otherwise create a new model
+            model, model_name_with_depth = models_dict.get_model(
+                model_name=model_name,
+                task_name=args.task_name,
+                dataset_name=dataset_name,
+                depth=depth,
+                input_channels=input_channels,
+                num_classes=num_classes
+            )
+
             cross_validator = CrossValidator(
                 dataset=train_loader.dataset,
-                model=models_dict.models_dict[model_name],
+                model=model,
                 model_name=model_name,
                 dataset_name=dataset_name,
                 criterion=nn.CrossEntropyLoss(),

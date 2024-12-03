@@ -8,7 +8,7 @@ from model.densenet_model import get_densenet
 from model.meddef.meddef import get_meddef
 from model.vgg_model import get_vgg
 from model.attention.MSARNet import MSARNet
-from model.attention.self_resnet import get_resnetse
+from model.attention.self_resnet import get_resnetsa
 
 class ModelLoader:
     def __init__(self, device, arch, pretrained=True):
@@ -24,7 +24,7 @@ class ModelLoader:
             'msarnet': {'func': MSARNet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'cbam_resnet': {'func': get_resnet_with_cbam, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
             'meddef': {'func': get_meddef, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
-            'resnetse': {'func': get_resnetse, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']}
+            'resnetsa': {'func': get_resnetsa, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']}
         }
         logging.info("ModelLoader initialized with models: " + ", ".join(self.models_dict.keys()))
 
@@ -32,10 +32,12 @@ class ModelLoader:
         """Finds the most recent checkpoint for the given model and dataset."""
         checkpoint_dir = f"out/{load_task}/{dataset_name}/{model_name_with_depth}/save_model"
         if not os.path.exists(checkpoint_dir):
+            print(f"ModelLoader: No checkpoint directory found for {model_name_with_depth} in {checkpoint_dir}")
             return None
 
         checkpoints = [f for f in os.listdir(checkpoint_dir) if f.startswith(f"best_{model_name_with_depth}_{dataset_name}")]
         if not checkpoints:
+            print(f"ModelLoader: No checkpoints found for {model_name_with_depth} in {checkpoint_dir}")
             return None
 
         # Sort checkpoints by modification time
@@ -43,7 +45,8 @@ class ModelLoader:
         latest_checkpoint = checkpoints[0]
         return os.path.join(checkpoint_dir, latest_checkpoint)
 
-    def get_model(self, model_name=None, depth=None, input_channels=3, num_classes=None, task_name=None, dataset_name=None):
+    def get_model(self, model_name=None, depth=None, input_channels=3, num_classes=None, task_name=None,
+                  dataset_name=None):
         """Retrieves a model based on specified architecture, depth, and configurations."""
         model_name = model_name or self.arch
 
@@ -68,23 +71,26 @@ class ModelLoader:
         # Filter the kwargs to only include the required parameters
         filtered_kwargs = {k: v for k, v in kwargs.items() if k in model_params}
 
-        model = None
         model_name_with_depth = f"{model_name}{depth}" if 'depth' in model_params else model_name
 
         # Check if a checkpoint exists
+        model = None
         if task_name and dataset_name:
             checkpoint_path = self.get_latest_checkpoint(model_name_with_depth, dataset_name, task_name)
             if checkpoint_path:
+                # Load the model from the checkpoint, don't create a new one
                 model = model_func(**filtered_kwargs)
                 model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
                 logging.info(f"Loaded pretrained model from checkpoint: {checkpoint_path}")
             else:
                 logging.info(f"No checkpoint found for {model_name_with_depth}. Creating a new model.")
 
+        # If model is still None, it means no checkpoint was found, so create a new model
         if model is None:
             model = model_func(**filtered_kwargs)
-            logging.info(f"Created a new model: {model_name_with_depth}")
+            logging.info(f"ModelLoader: Created a new model: {model_name_with_depth}")
 
+        # Move the model to the specified device
         if torch.cuda.is_available():
             model = model.to(self.device)
 

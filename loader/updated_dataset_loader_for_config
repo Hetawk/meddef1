@@ -7,13 +7,18 @@ import pandas as pd
 import torch
 from PIL import Image
 from torchvision.datasets import ImageFolder
-from torch.utils.data import Dataset, DataLoader, random_split, WeightedRandomSampler
+import nibabel as nib
 from typing import Tuple, Optional, Union, cast
+from torch.utils.data import Dataset, DataLoader, random_split, WeightedRandomSampler
 from collections.abc import Sized
-import config  # Import the configuration file
+from .config import data_transforms, dataset_dirs
 
 class DatasetLoader:
+    """
+    A class to manage and load various datasets for machine learning tasks.
+    """
     _dataset_instance = None
+
     pin_memory = True
 
     def __new__(cls, dataset_name, data_dir='./dataset'):
@@ -28,15 +33,25 @@ class DatasetLoader:
         self.dataset_name = dataset_name
         self.data_dir = data_dir
         self.datasets_dict = {
-            'scisic': self.load_dataset,
             'ccts': self.load_dataset,
+            'scisic': self.load_dataset,
             'rotc': self.load_dataset,
+            'kvasir': self.load_dataset,
+            'dermnet': self.load_dataset,
+            'chest_xray': self.load_dataset
         }
         if self.dataset_name not in self.datasets_dict:
             raise ValueError(f"Dataset {self.dataset_name} not recognized.")
         logging.info(f"DatasetLoader initialized for {dataset_name}.")
         DatasetLoader._dataset_instance = self
         self._initialized = True
+
+    @staticmethod
+    def get_all_datasets(dataset_names, data_dir='./dataset'):
+        datasets_dict = {}
+        for dataset_name in dataset_names:
+            datasets_dict[dataset_name] = DatasetLoader(dataset_name, data_dir)
+        return datasets_dict
 
     def load(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
         logging.info(f"Loading dataset: {self.dataset_name}.")
@@ -46,28 +61,32 @@ class DatasetLoader:
             raise ValueError(f"Dataset {self.dataset_name} not recognized.")
 
     def load_dataset(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
-        data_transforms = config.data_transforms
-        dataset_dirs = config.dataset_dirs[self.dataset_name]
+        data_transform = data_transforms
+        dataset_dir = dataset_dirs[self.dataset_name]
 
-        train_dir = os.path.join(self.data_dir, dataset_dirs['train'])
-        test_dir = os.path.join(self.data_dir, dataset_dirs['test'])
-        val_dir = dataset_dirs.get('val')
+        train_dir = os.path.join(self.data_dir, dataset_dir['train'])
+        test_dir = os.path.join(self.data_dir, dataset_dir.get('test', ''))
+        val_dir = os.path.join(self.data_dir, dataset_dir.get('val', ''))
 
-        self.check_for_corrupted_images(train_dir, data_transforms['train'])
-        self.check_for_corrupted_images(test_dir, data_transforms['test'])
+        self.check_for_corrupted_images(train_dir, data_transform['train'])
+        if test_dir:
+            self.check_for_corrupted_images(test_dir, data_transform['test'])
         if val_dir:
-            self.check_for_corrupted_images(val_dir, data_transforms['val'])
+            self.check_for_corrupted_images(val_dir, data_transform['val'])
 
-        full_dataset = ImageFolder(train_dir, data_transforms['train'])
-        train_dataset, val_dataset, _ = self.split_dataset(full_dataset)
-        test_dataset = ImageFolder(test_dir, data_transforms['test'])
-        if val_dir:
-            val_dataset = ImageFolder(val_dir, data_transforms['val'])
+        train_dataset = ImageFolder(train_dir, data_transform['train'])
+        test_dataset = ImageFolder(test_dir, data_transform['test']) if test_dir else None
+        val_dataset = ImageFolder(val_dir, data_transform['val']) if val_dir else None
 
-        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, full_dataset)
-        train_loader = DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size, num_workers=num_workers, pin_memory=pin_memory)
-        val_loader = DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers, pin_memory=pin_memory)
-        test_loader = DataLoader(test_dataset, batch_size=test_batch_size, num_workers=num_workers, pin_memory=pin_memory)
+        if val_dataset:
+            train_dataset, val_dataset, _ = self.split_dataset(train_dataset)
+        else:
+            train_dataset, val_dataset, _ = self.split_dataset(train_dataset)
+
+        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, train_dataset)
+        train_loader = torch.utils.data.DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size, num_workers=num_workers, pin_memory=pin_memory)
+        val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers, pin_memory=pin_memory) if val_dataset else None
+        test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=test_batch_size, num_workers=num_workers, pin_memory=pin_memory) if test_dataset else None
 
         return train_loader, val_loader, test_loader
 
@@ -75,8 +94,8 @@ class DatasetLoader:
         for root, _, files in os.walk(directory):
             for file in files:
                 if file.endswith(('jpg', 'jpeg', 'png')):
+                    img_path = os.path.join(root, file)
                     try:
-                        img_path = os.path.join(root, file)
                         img = Image.open(img_path)
                         img = transform(img)
                     except Exception as e:
@@ -103,32 +122,89 @@ class DatasetLoader:
         else:
             raise ValueError("Dataset is too small to be split into train, validation, and test sets with the specified proportions.")
 
+    def get_input_channels(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
+        train_loader, val_loader, test_loader = self.load(train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory)
+        train_dataset = train_loader.dataset
+        sample_img, _ = train_dataset[0]
+        return sample_img.shape[0]
+
     @staticmethod
     def get_WeightedRandom_Sampler(subset_dataset, original_dataset):
         original_dataset = original_dataset.dataset if isinstance(original_dataset, torch.utils.data.Subset) else original_dataset
         dataLoader = DataLoader(subset_dataset, batch_size=512)
-        All_target = [targets[i].item() for _, (_, targets) in enumerate(dataLoader) for i in range(targets.shape[0])]
-        target = np.array(All_target)
+
+        all_target = []
+        for _, (_, targets) in enumerate(dataLoader):
+            for i in range(targets.shape[0]):
+                all_target.append(targets[i].item())
+
+        target = np.array(all_target)
         logging.info("\nClass distribution in the dataset:")
         for i, class_name in enumerate(original_dataset.classes):
             logging.info(f"{np.sum(target == i)}: {class_name}")
+
         class_sample_count = np.array([len(np.where(target == t)[0]) for t in np.unique(target)])
         weight = 1. / class_sample_count
+
         samples_weight = np.array([weight[t] for t in target])
-        samples_weight = torch.from_numpy(samples_weight).double()
-        return WeightedRandomSampler(samples_weight, len(samples_weight))
+        samples_weight = torch.from_numpy(samples_weight)
+        samples_weight = samples_weight.double()
+
+        sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
+
+        return sampler
 
     @staticmethod
     def get_dataloader_target_class_number(dataLoader):
         if DatasetLoader._dataset_instance is None:
             raise ValueError("DatasetLoader instance is not initialized.")
+
         original_dataset = dataLoader.dataset
         if isinstance(original_dataset, torch.utils.data.Subset):
             original_dataset = original_dataset.dataset
-        All_target_2 = [targets[i].item() for _, (inputs, targets) in enumerate(dataLoader) for i in range(targets.shape[0])]
-        data = np.array(All_target_2)
+
+        all_target_2 = []
+        for batch_idx, (inputs, targets) in enumerate(dataLoader):
+            for i in range(targets.shape[0]):
+                all_target_2.append(targets[i].item())
+
+        data = np.array(all_target_2)
         unique_classes, counts = np.unique(data, return_counts=True)
         logging.info("Unique classes and their counts in the dataset:")
         for cls, count in zip(unique_classes, counts):
             logging.info(f"{count}: {original_dataset.classes[cls]}")
-        return original_dataset.classes, len(unique_classes)
+
+        return original_dataset.classes, len(original_dataset.classes)
+
+    class CustomImageDataset(Dataset):
+        def __init__(self, root_dir, name_mapping_file, survival_info_file, transform=None, validation=False):
+            self.root_dir = root_dir
+            self.transform = transform
+            self.image_paths = []
+            self.labels = []
+            self.load_data(root_dir, name_mapping_file, survival_info_file, validation)
+
+        def load_data(self, root_dir, name_mapping_file, survival_info_file, validation):
+            name_mapping = pd.read_csv(name_mapping_file)
+            survival_info = pd.read_csv(survival_info_file)
+
+            for _, row in name_mapping.iterrows():
+                subject_id = row['BraTS_2020_subject_ID']
+                subject_dir = os.path.join(root_dir, str(subject_id))
+                for file in os.listdir(subject_dir):
+                    if file.endswith('.nii'):
+                        self.image_paths.append(os.path.join(subject_dir, file))
+                        if 'seg' in file:
+                            self.labels.append(subject_id)
+
+        def __len__(self):
+            return len(self.image_paths)
+
+        def __getitem__(self, idx):
+            image_path = self.image_paths[idx]
+            image = nib.load(image_path).get_fdata()
+            image = np.expand_dims(image, axis=0)
+            label = self.labels[idx]
+            if self.transform:
+                image = self.transform(image)
+            return image, label
