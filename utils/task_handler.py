@@ -37,7 +37,7 @@ class TaskHandler:
         self.trained_models = {}
         self.num_classes = num_classes
 
-    def run_train(self):
+    def run_train(self, loaded_model=None, loaded_model_name_with_depth=None):
         """Runs the training process for the specified dataset and models."""
         self.current_task = 'normal_training'
         logging.info("Training task selected.")
@@ -76,7 +76,8 @@ class TaskHandler:
             models = self.train_and_evaluate_model(
                 model_name, dataset_name, train_loader, val_loader, test_loader, input_channels,
                 depths,  # Pass depths directly
-                self.num_classes, self.classes[dataset_name]
+                self.num_classes, self.classes[dataset_name],
+                loaded_model=loaded_model, loaded_model_name_with_depth=loaded_model_name_with_depth
             )
 
             for depth, (model, trainer) in models.items():
@@ -246,20 +247,25 @@ class TaskHandler:
             f"Adversarial samples visualized for {model_name_with_depth} using {self.args.attack_name}")
 
     def train_and_evaluate_model(self, model_name, dataset_name, train_loader, val_loader, test_loader, input_channels,
-                                 depths, num_classes, class_names, adversarial=False):
+                                 depths, num_classes, class_names, adversarial=False, loaded_model=None,
+                                 loaded_model_name_with_depth=None):
         """Trains and evaluates models for each specified depth using DataLoader instances."""
 
         models = {}
 
         for depth in depths:
-            try:
-                model, model_name_with_depth = self.models_loader.get_model(
-                    model_name, depth=depth, input_channels=input_channels, num_classes=num_classes
-                )
-                model.to(self.device)
-            except ValueError as e:
-                logging.error(f"Failed to load model {model_name} with depth {depth}: {e}")
-                continue
+            if loaded_model and loaded_model_name_with_depth == f"{model_name}{depth}":
+                model = loaded_model
+                model_name_with_depth = loaded_model_name_with_depth
+            else:
+                try:
+                    model, model_name_with_depth = self.models_loader.get_model(
+                        model_name, depth=depth, input_channels=input_channels, num_classes=num_classes
+                    )
+                    model.to(self.device)
+                except ValueError as e:
+                    logging.error(f"Failed to load model {model_name} with depth {depth}: {e}")
+                    continue
 
             # Calculate and print the total number of parameters in the model
             total_params = sum(p.numel() for p in model.parameters()) / 1000000.0

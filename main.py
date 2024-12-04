@@ -109,7 +109,6 @@ def process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_
 
         logging.info(f"Using depths for model {model_name}: {depths}")
         for depth in depths:
-
             # Load the model from checkpoint if available, otherwise create a new model
             model, model_name_with_depth = models_dict.get_model(
                 model_name=model_name,
@@ -119,6 +118,10 @@ def process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_
                 input_channels=input_channels,
                 num_classes=num_classes
             )
+
+            if model is None:
+                logging.error(f"Failed to load or create model {model_name_with_depth}.")
+                continue
 
             cross_validator = CrossValidator(
                 dataset=train_loader.dataset,
@@ -154,7 +157,7 @@ def process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_
 
             task_handler.args.depth = [depth]
             if args.task_name == 'normal_training':
-                task_handler.run_train()
+                task_handler.run_train(model, model_name_with_depth)
             elif args.task_name == 'attack':
                 task_handler.run_attack()
             elif args.task_name == 'defense':
