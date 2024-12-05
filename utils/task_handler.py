@@ -5,7 +5,6 @@ from datetime import datetime
 import numpy as np
 import torch
 
-from gan.adversarial_example_generator import AdversarialExampleGenerator
 from gan.attack.attacker import AttackHandler
 from gan.defense.defense_loader import DefenseLoader
 from gan.defense.prune import Pruner
@@ -13,6 +12,7 @@ from loader.dataset_loader import DatasetLoader
 from train import Trainer
 from utils.ensemble import Ensemble
 from utils.evaluator import Evaluator
+from utils.visual.attack.adversarial_examples import adversarial_examples
 from utils.visual.visualization import Visualization
 
 class TaskHandler:
@@ -106,26 +106,16 @@ class TaskHandler:
                     logging.error(f"Error evaluating model {model_name_with_depth}: {e}")
 
                 # Generate and visualize adversarial examples
-                original_data = []
-                for data, _ in test_loader:
-                    original_data.append(data)
-                original_data = torch.cat(original_data, dim=0)
-
-                # Initialize AdversarialExampleGenerator
-                adversarial_example_generator = AdversarialExampleGenerator(
-                    noise_dim=100,
-                    data_dim=input_channels,
-                    device=self.device,
-                    model=model,
-                    args=self.args
+                attack_handler = AttackHandler(model, 'fgsm', self.args)
+                results = attack_handler.generate_adversarial_samples(test_loader)
+                original_data = torch.cat([data for data, _ in test_loader], dim=0)
+                adversarial_examples = torch.cat(results['adversarial'], dim=0)
+                self.visualization.visualize_attack(
+                    original_data, adversarial_examples, None, model_name_with_depth, self.current_task,
+                    dataset_name, 'fgsm'
                 )
+                logging.info(f"Adversarial examples visualized and saved for model {model_name_with_depth}")
 
-                adversarial_examples = adversarial_example_generator.generate_adversarial_examples(
-                    len(original_data))
-                adversarial_example_generator.visualize_adversarial_examples(
-                    original_data, adversarial_examples, model_name_with_depth, self.current_task,
-                    dataset_name, 'gan_attack'
-                )
 
         logging.info(f"Taskhandler: - Class names: {self.classes[dataset_name]}")
         self.visualization.visualize_normal(

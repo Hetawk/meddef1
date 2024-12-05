@@ -23,6 +23,8 @@ def plot_precision_recall_curve(model_name, true_labels, predictions, class_name
 
     # Convert predictions to a NumPy array and ensure it has the correct shape
     predictions = np.array(predictions, dtype=float)
+    if predictions.ndim == 1:
+        predictions = predictions.reshape(-1, 1)
 
     # Compute Precision-Recall and plot curve for each class
     for i in range(n_classes):
