@@ -25,7 +25,7 @@ def plot_roc_auc(model_name, true_labels, predictions, class_names=None, dataset
         if i < predictions.shape[1]:
             fpr, tpr, _ = roc_curve(true_labels_bin[:, i], predictions[:, i])
             roc_auc = roc_auc_score(true_labels_bin[:, i], predictions[:, i])
-            ax.plot(fpr, tpr, lw=2, label=f'{model_name} class {class_names[i]} (AUC = {roc_auc:.2f})')
+            ax.plot(fpr, tpr, lw=2, label=f'class {class_names[i]} (AUC = {roc_auc:.2f})')
         else:
             logging.warning(f'Missing class {i} in predictions for model: {model_name}')
 

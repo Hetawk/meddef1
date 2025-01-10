@@ -24,7 +24,7 @@ def plot_roc_curve(model_name, true_labels, predictions, class_names=None, datas
     for i in range(n_classes):
         if i < predictions.shape[1]:
             fpr, tpr, _ = roc_curve(true_labels_bin[:, i], predictions[:, i])
-            ax.plot(fpr, tpr, lw=2, label=f'{model_name} class {class_names[i]}')
+            ax.plot(fpr, tpr, lw=2, label=f'class {class_names[i]}')
         else:
             logging.warning(f'Missing class {i} in predictions for model: {model_name}')
 

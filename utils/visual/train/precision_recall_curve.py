@@ -30,7 +30,7 @@ def plot_precision_recall_curve(model_name, true_labels, predictions, class_name
     for i in range(n_classes):
         if i < predictions.shape[1]:  # Check if the column exists in the predictions array
             precision, recall, _ = precision_recall_curve(true_labels_bin[:, i], predictions[:, i])
-            ax.plot(recall, precision, lw=2, label=f'{model_name} class {class_names[i]}')
+            ax.plot(recall, precision, lw=2, label=f'class {class_names[i]}')
             # logging.info(f'Plotted precision-recall curve for class {class_names[i]}')
         else:
             logging.warning(f'Missing class {i} in predictions for model: {model_name}')

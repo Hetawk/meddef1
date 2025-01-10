@@ -25,7 +25,7 @@ def plot_precision_recall_auc(model_name, true_labels, predictions, class_names=
         if i < predictions.shape[1]:
             precision, recall, _ = precision_recall_curve(true_labels_bin[:, i], predictions[:, i])
             pr_auc = auc(recall, precision)
-            ax.plot(recall, precision, lw=2, label=f'{model_name} class {class_names[i]} (AUC = {pr_auc:.2f})')
+            ax.plot(recall, precision, lw=2, label=f'class {class_names[i]} (AUC = {pr_auc:.2f})')
         else:
             logging.warning(f'Missing class {i} in predictions for model: {model_name}')
 
