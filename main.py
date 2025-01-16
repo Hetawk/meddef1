@@ -13,6 +13,7 @@ from utils.task_handler import TaskHandler
 from utils.robustness.lr_scheduler import LRSchedulerLoader
 from utils.robustness.cross_validation import CrossValidator
 from arg_parser import get_args
+import torch.multiprocessing as mp
 
 
 
@@ -167,6 +168,7 @@ def process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_
 
 
 def main():
+    mp.set_start_method('forkserver') # Required for PyTorch multiprocessing or rather use 'spawn'
     args = get_args()
     setup_environment(args)
     hyperparams = get_hyperparams(args)

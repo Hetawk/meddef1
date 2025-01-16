@@ -38,8 +38,8 @@ def get_args():
                         help='path to latest checkpoint (default: none)')
 
     # Architecture
-    parser.add_argument('--arch', '-a', nargs='+', metavar='ARCH', default=['msarnet', 'resnet', 'densenet'])
-    parser.add_argument('--depth', type=str, default='{"msarnet": [18, 34], "resnet": [18, 34], "densenet": [121]}',
+    parser.add_argument('--arch', '-a', nargs='+', metavar='ARCH', default=['meddef', 'resnet', 'densenet'])
+    parser.add_argument('--depth', type=str, default='{"meddef": [1.0, 1.1], "resnet": [18, 34], "densenet": [121]}',
                         help='Model depths as a JSON string.')
 
     # Miscs

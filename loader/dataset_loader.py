@@ -151,8 +151,6 @@ class DatasetLoader:
                 transforms.ToTensor(),
                 normalize]),
             'val': transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
                 transforms.CenterCrop(256),
                 transforms.RandomCrop(224),
                 transforms.ToTensor(),
@@ -201,8 +199,6 @@ class DatasetLoader:
                 transforms.ToTensor(),
                 normalize]),
             'val': transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
                 transforms.CenterCrop(256),
                 transforms.RandomCrop(224),
                 transforms.ToTensor(),
@@ -249,8 +245,6 @@ class DatasetLoader:
                 transforms.ToTensor(),
                 normalize]),
             'val': transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
                 transforms.CenterCrop(256),
                 transforms.RandomCrop(224),
                 transforms.ToTensor(),
@@ -305,7 +299,8 @@ class DatasetLoader:
         """
                 Chest CT-Scan images Dataset
                 https://www.kaggle.com/datasets/mohamedhanyyy/chest-ctscan-images
-
+                Data: 613 images -> Batch size to use: 8 to 16  -> Test set batch can more than training
+                Works best: 4 - 8
         """
         normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         data_transforms = {
@@ -317,8 +312,6 @@ class DatasetLoader:
                 transforms.ToTensor(),
                 normalize]),
             'val': transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
                 transforms.CenterCrop(256),
                 transforms.RandomCrop(224),
                 transforms.ToTensor(),
@@ -364,8 +357,6 @@ class DatasetLoader:
                 transforms.ToTensor(),
                 normalize]),
             'val': transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
                 transforms.CenterCrop(256),
                 transforms.RandomCrop(224),
                 transforms.ToTensor(),
@@ -413,8 +404,6 @@ class DatasetLoader:
                 transforms.ToTensor(),
                 normalize]),
             'val': transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
                 transforms.CenterCrop(256),
                 transforms.RandomCrop(224),
                 transforms.ToTensor(),
