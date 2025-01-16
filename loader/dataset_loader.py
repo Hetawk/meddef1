@@ -307,6 +307,8 @@ class DatasetLoader:
             'train': transforms.Compose([
                 transforms.RandomHorizontalFlip(),
                 transforms.RandomVerticalFlip(),
+                transforms.RandomRotation(30),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2),
                 transforms.CenterCrop(256),
                 transforms.RandomCrop(224),
                 transforms.ToTensor(),
