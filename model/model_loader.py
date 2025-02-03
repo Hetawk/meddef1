@@ -1,3 +1,6 @@
+# model_loader.py
+
+import gc
 import os
 import torch
 import logging
@@ -45,6 +48,8 @@ class ModelLoader:
         latest_checkpoint = checkpoints[0]
         return os.path.join(checkpoint_dir, latest_checkpoint)
 
+    # model_loader.py
+
     def get_model(self, model_name=None, depth=None, input_channels=3, num_classes=None, task_name=None,
                   dataset_name=None):
         """Retrieves a model based on specified architecture, depth, and configurations."""
@@ -78,10 +83,17 @@ class ModelLoader:
         if task_name and dataset_name:
             checkpoint_path = self.get_latest_checkpoint(model_name_with_depth, dataset_name, task_name)
             if checkpoint_path:
-                # Load the model from the checkpoint, don't create a new one
+                # Load the checkpoint to CPU first to avoid OOM issues
+                checkpoint = torch.load(checkpoint_path, map_location='cpu')
                 model = model_func(**filtered_kwargs)
-                model.load_state_dict(torch.load(checkpoint_path, map_location=self.device))
+                model.load_state_dict(checkpoint)
                 logging.info(f"Loaded pretrained model from checkpoint: {checkpoint_path}")
+                # Delete the checkpoint variable and free any cached memory
+                del checkpoint
+                gc.collect()
+                torch.cuda.empty_cache()
+                # Now move the model to the specified device
+                model = model.to(self.device)
             else:
                 logging.info(f"No checkpoint found for {model_name_with_depth}. Creating a new model.")
 
@@ -95,6 +107,8 @@ class ModelLoader:
             model = model.to(self.device)
 
         return model, model_name_with_depth
+
+
 
     def load_pretrained_model(self, model_name, load_task, dataset_name, depth=None, input_channels=3, num_classes=None):
         """Loads a pretrained model, specified by architecture, depth, and task-related information."""

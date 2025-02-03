@@ -8,8 +8,8 @@ def get_args():
 
     # Datasets
     parser.add_argument('-d', '--data', nargs='+', default=['ccts'], type=str)
-    parser.add_argument('-j', '--workers', default=6, type=int, metavar='N',
-                        help='number of data loading workers (default: 4)')
+    parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+                        help='number of data loading workers (default: 6)')
     parser.add_argument('--data_dir', default='./dataset', type=str, metavar='PATH', help='path to dataset')
     parser.add_argument('--use_cross_validator', action='store_true', help='Use cross validation')
 
@@ -17,8 +17,8 @@ def get_args():
     parser.add_argument('--epochs', default=3, type=int, metavar='N', help='number of total epochs to run')
     parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                         help='manual epoch number (useful on restarts)')
-    parser.add_argument('--train-batch', default=64, type=int, metavar='N', help='train batchsize (default: 256)')
-    parser.add_argument('--test-batch', default=32, type=int, metavar='N', help='test batchsize (default: 200)')
+    parser.add_argument('--train-batch', default=64, type=int, metavar='N', help='train batchsize (default: 64)')
+    parser.add_argument('--test-batch', default=32, type=int, metavar='N', help='test batchsize (default: 32)')
     parser.add_argument('--lr', '--learning-rate', default=0.01, type=float, metavar='LR', help='initial learning rate')
     parser.add_argument('--drop', '--dropout', default=0, type=float, metavar='Dropout', help='Dropout ratio')
     parser.add_argument('--schedule', type=int, nargs='+', default=[150, 225],
@@ -42,17 +42,21 @@ def get_args():
     parser.add_argument('--depth', type=str, default='{"meddef": [1.0, 1.1], "resnet": [18, 34], "densenet": [121]}',
                         help='Model depths as a JSON string.')
 
-    # Miscs
+    # Miscellaneous
     parser.add_argument('--manualSeed', type=int, help='manual seed')
     parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                         help='evaluate model on validation set')
     parser.add_argument('--pretrained', dest='pretrained', default=True, action='store_true',
                         help='use pre-trained model')
-    parser.add_argument('--pin-memory', action='store_false', help='Use pinned memory for data loading')
+    # Use pinned memory only if flag is specified; default is False
+    parser.add_argument('--pin-memory', action='store_true', default=False, help='Use pinned memory for data loading')
+
+    # Add an FP16 flag to enable half precision (if desired)
+    parser.add_argument('--fp16', action='store_true', default=False, help='Use FP16 (half precision) for model loading/training')
 
     # Device options
-    parser.add_argument('--gpu-ids', default='3,2,1', type=str, help='id(s) for CUDA_VISIBLE_DEVICES')
-    parser.add_argument('--device-index', default=0, type=int, help='CUDA device index (default: 3)')
+    parser.add_argument('--gpu-ids', default='3,2,1,0', type=str, help='id(s) for CUDA_VISIBLE_DEVICES')
+    parser.add_argument('--device-index', default=0, type=int, help='CUDA device index (default: 0)')
 
     # Task to run
     parser.add_argument('--task_name', type=str, choices=['normal_training', 'attack', 'defense'],
