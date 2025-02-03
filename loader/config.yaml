@@ -1,0 +1,36 @@
+data:
+  data_dir: "./dataset"
+  datasets:
+    - name: scisic_train
+      modality: dermoscopy
+      train_dir: "scisic/Train"
+      test_dir: "scisic/Test"
+      preprocessing:
+        normalize: {method: "minmax", target_range: [0, 1]}
+        artifact_removal: {method: "median_filter", kernel_size: 3}
+        contrast_enhancement: {method: "CLAHE", clip_limit: 2.0, tile_grid_size: [8, 8]}
+        resize: [224, 224]
+    - name: ccts_train
+      modality: ct
+      train_dir: "ccts/train"
+      test_dir: "ccts/test"
+      preprocessing:
+        windowing: {method: "hu_window", window: [-1000, 400]}
+        normalize: {method: "zscore"}
+        artifact_removal: {method: "gaussian_filter", sigma: 1.0}
+        resize: [256, 256]
+    - name: rotc_train
+      modality: oct
+      train_dir: "rotc/train"
+      test_dir: "rotc/test"
+      preprocessing:
+        normalize: {method: "minmax", target_range: [0, 1]}
+        contrast_enhancement: {method: "histogram_equalization"}
+        resize: [224, 224]
+
+training:
+  epochs: 30
+  batch_size: 64
+  lr: 0.01
+  momentum: 0.9
+  weight_decay: 1e-4

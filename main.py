@@ -7,6 +7,7 @@ import torchvision
 from torch import nn
 
 from loader.dataset_loader import DatasetLoader
+from loader.preprocessing import get_input_channels, get_dataloader_target_class_number
 from model.model_loader import ModelLoader
 from utils.logger import setup_logger
 from utils.robustness.optimizers import OptimizerLoader
@@ -78,13 +79,19 @@ def initialize_components(args):
 
 def process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_dict, lr_scheduler_loader, hyperparams):
     dataset_loader.pin_memory = args.pin_memory
-    input_channels = dataset_loader.get_input_channels(
-        train_batch_size=args.train_batch,
-        val_batch_size=args.test_batch,
-        test_batch_size=args.test_batch,
-        num_workers=args.workers,
-        pin_memory=args.pin_memory
-    )
+    # input_channels = get_input_channels(
+    #     train_batch_size=args.train_batch,
+    #     val_batch_size=args.test_batch,
+    #     test_batch_size=args.test_batch,
+    #     num_workers=args.workers,
+    #     pin_memory=args.pin_memory
+    # )
+    input_channels = get_input_channels(dataset_loader, train_batch_size=args.train_batch,
+                                        val_batch_size=args.test_batch,
+                                        test_batch_size=args.test_batch,
+                                        num_workers=args.workers,
+                                        pin_memory=args.pin_memory
+                                        )
 
     train_loader, val_loader, test_loader = dataset_loader.load(
         train_batch_size=args.train_batch,
@@ -96,7 +103,7 @@ def process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_
 
     train_dataset = train_loader.dataset
     original_dataset = train_dataset.dataset if isinstance(train_dataset, torch.utils.data.Subset) else train_dataset
-    classes, num_classes = DatasetLoader.get_dataloader_target_class_number(train_loader)
+    classes, num_classes = get_dataloader_target_class_number(train_loader)
 
     for model_name in args.arch:
         if isinstance(args.depth, dict):
