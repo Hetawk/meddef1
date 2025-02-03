@@ -12,6 +12,35 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier,
 import xgboost as xgb
 import lightgbm as lgb
 
+from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import Ridge
+
+class ELM(BaseEstimator, ClassifierMixin):
+    def __init__(self, n_hidden=100, alpha=1.0):
+        self.n_hidden = n_hidden
+        self.alpha = alpha
+        self.scaler = StandardScaler()
+        self.hidden_weights = None
+        self.hidden_bias = None
+        self.output_weights = None
+
+    def _sigmoid(self, x):
+        return 1 / (1 + np.exp(-x))
+
+    def fit(self, X, y):
+        X = self.scaler.fit_transform(X)
+        n_samples, n_features = X.shape
+        self.hidden_weights = np.random.randn(n_features, self.n_hidden)
+        self.hidden_bias = np.random.randn(self.n_hidden)
+        H = self._sigmoid(np.dot(X, self.hidden_weights) + self.hidden_bias)
+        self.output_weights = Ridge(alpha=self.alpha).fit(H, y).coef_
+        return self
+
+    def predict(self, X):
+        X = self.scaler.transform(X)
+        H = self._sigmoid(np.dot(X, self.hidden_weights) + self.hidden_bias)
+        return np.dot(H, self.output_weights)
 
 class SupervisedLearning:
 
@@ -79,10 +108,8 @@ class SupervisedLearning:
         model.fit(X_train, y_train)
         return model
 
-
-
-
-
-
-
-
+    # Extreme Learning Machine
+    def elm_classifier(self, X_train, y_train, n_hidden=100, alpha=1.0):
+        model = ELM(n_hidden=n_hidden, alpha=alpha)
+        model.fit(X_train, y_train)
+        return model

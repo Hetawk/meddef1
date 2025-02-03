@@ -12,7 +12,6 @@ from loader.dataset_loader import DatasetLoader
 from train import Trainer
 from utils.ensemble import Ensemble
 from utils.evaluator import Evaluator
-from utils.visual.attack.adversarial_examples import adversarial_examples
 from utils.visual.visualization import Visualization
 
 class TaskHandler:

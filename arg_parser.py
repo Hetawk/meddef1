@@ -8,7 +8,7 @@ def get_args():
 
     # Datasets
     parser.add_argument('-d', '--data', nargs='+', default=['ccts'], type=str)
-    parser.add_argument('-j', '--workers', default=8, type=int, metavar='N',
+    parser.add_argument('-j', '--workers', default=6, type=int, metavar='N',
                         help='number of data loading workers (default: 4)')
     parser.add_argument('--data_dir', default='./dataset', type=str, metavar='PATH', help='path to dataset')
     parser.add_argument('--use_cross_validator', action='store_true', help='Use cross validation')
@@ -71,7 +71,10 @@ def get_args():
     args = parser.parse_args()
 
     # Ensure depth is always a dictionary
-    args.depth = json.loads(args.depth)
+    try:
+        args.depth = json.loads(args.depth.replace("'", "\""))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON format for depth argument: {args.depth}") from e
 
     # Use CUDA
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_ids

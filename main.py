@@ -1,4 +1,5 @@
 import logging
+import os
 import random
 import sys
 import torch
@@ -168,7 +169,10 @@ def process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_
 
 
 def main():
-    mp.set_start_method('forkserver') # Required for PyTorch multiprocessing or rather use 'spawn'
+    if os.name == 'nt':  # Check if the operating system is Windows
+        mp.set_start_method('spawn')
+    else:
+        mp.set_start_method('forkserver')  # Use 'forkserver' for Unix-based systems
     args = get_args()
     setup_environment(args)
     hyperparams = get_hyperparams(args)

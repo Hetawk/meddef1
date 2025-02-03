@@ -7,13 +7,12 @@ import numpy
 import numpy as np
 import pandas as pd
 import torch
-from PIL import Image
-from torchvision import datasets, transforms
 from torchvision.datasets import ImageFolder
 import nibabel as nib
-from typing import Tuple, Optional, Union, cast
-from torch.utils.data import Dataset, DataLoader, random_split, WeightedRandomSampler
-from collections.abc import Sized
+from torch.utils.data import Dataset
+from loader.preprocessing import get_default_transforms, preprocess_dataset, get_WeightedRandom_Sampler, split_dataset, \
+    check_for_corrupted_images
+
 
 class DatasetLoader:
     """
@@ -115,65 +114,28 @@ class DatasetLoader:
         except KeyError:
             raise ValueError(f"Dataset {self.dataset_name} not recognized.")
 
-    def check_for_corrupted_images(self, directory, transform):
-        """
-        Fix truncated images
-        Checks for corrupted images in the specified directory.
-
-        Args:
-            directory (str): The directory to check for corrupted images.
-            transform (callable): The transform to apply to the images.
-        """
-        for root, _, files in os.walk(directory):
-            for file in files:
-                if file.endswith(('jpg', 'jpeg', 'png')):
-                    try:
-                        img_path = os.path.join(root, file)
-                        img = Image.open(img_path)
-                        img = transform(img)
-                    except Exception as e:
-                        logging.error(f"Corrupted image file: {img_path} - {e}")
     # Dataset #3: scisic
     def load_scisic(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
         """
-        Skin Cancer ISIC
+        Skin Cancer ISIC: 2358
         https://www.kaggle.com/datasets/nodoubttome/skin-cancer9-classesisic
         Loads the SCISIC dataset and returns DataLoaders for the training, validation, and test datasets.
 
         """
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        data_transforms = {
-            'train': transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
-                transforms.CenterCrop(256),
-                transforms.RandomCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-            'val': transforms.Compose([
-                transforms.CenterCrop(256),
-                transforms.RandomCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-            'test': transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-        }
+        data_transforms = get_default_transforms()
 
         train_dir = os.path.join(self.data_dir, 'scisic', 'Train')
         test_dir = os.path.join(self.data_dir, 'scisic', 'Test')
 
         # Check for corrupted images in the training directory
-        self.check_for_corrupted_images(train_dir, data_transforms['train'])
-        self.check_for_corrupted_images(test_dir, data_transforms['test'])
+        check_for_corrupted_images(train_dir, data_transforms['train'])
+        check_for_corrupted_images(test_dir, data_transforms['test'])
 
         full_dataset = ImageFolder(train_dir, data_transforms['train'])
-        train_dataset, val_dataset, _ = self.split_dataset(full_dataset)
+        train_dataset, val_dataset, _ = split_dataset(full_dataset)
         test_dataset = ImageFolder(test_dir, data_transforms['test'])
 
-        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, full_dataset)
+        weight_sampler = get_WeightedRandom_Sampler(train_dataset, full_dataset)
         train_loader = torch.utils.data.DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
                                                    num_workers=num_workers, pin_memory=pin_memory)
         val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers,
@@ -189,36 +151,17 @@ class DatasetLoader:
         https://www.kaggle.com/datasets/abdallahwagih/kvasir-dataset-for-classification-and-segmentation
         Loads the Kvasir dataset and returns DataLoaders for the training, validation, and test datasets.
         """
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        data_transforms = {
-            'train': transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
-                transforms.CenterCrop(256),
-                transforms.RandomCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-            'val': transforms.Compose([
-                transforms.CenterCrop(256),
-                transforms.RandomCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-            'test': transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-        }
+        data_transforms = get_default_transforms()
 
         train_dir = os.path.join(self.data_dir, 'kvasir', 'train')
 
         # Check for corrupted images in the training directory
-        self.check_for_corrupted_images(train_dir, data_transforms['train'])
+        check_for_corrupted_images(train_dir, data_transforms['train'])
 
         full_dataset = ImageFolder(train_dir, data_transforms['train'])
-        train_dataset, val_dataset, test_dataset = self.split_dataset(full_dataset)
+        train_dataset, val_dataset, test_dataset = split_dataset(full_dataset)
 
-        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, full_dataset)
+        weight_sampler = get_WeightedRandom_Sampler(train_dataset, full_dataset)
         train_loader = torch.utils.data.DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
                                                    num_workers=num_workers, pin_memory=pin_memory)
         val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers,
@@ -233,41 +176,22 @@ class DatasetLoader:
         Dermnet
         https://www.kaggle.com/datasets/shubhamgoel27/dermnet
         Loads the Dermnet dataset and returns DataLoaders for the training, validation, and test datasets.
-
+        19,500 images ->
         """
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        data_transforms = {
-            'train': transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
-                transforms.CenterCrop(256),
-                transforms.RandomCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-            'val': transforms.Compose([
-                transforms.CenterCrop(256),
-                transforms.RandomCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-            'test': transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-        }
+        data_transforms = get_default_transforms()
 
         train_dir = os.path.join(self.data_dir, 'dermnet', 'train')
         test_dir = os.path.join(self.data_dir, 'dermnet', 'test')
 
         # Check for corrupted images in the training directory
-        self.check_for_corrupted_images(train_dir, data_transforms['train'])
-        self.check_for_corrupted_images(test_dir, data_transforms['test'])
+        check_for_corrupted_images(train_dir, data_transforms['train'])
+        check_for_corrupted_images(test_dir, data_transforms['test'])
 
         full_dataset = ImageFolder(train_dir, data_transforms['train'])
-        train_dataset, val_dataset, _ = self.split_dataset(full_dataset)
+        train_dataset, val_dataset, _ = split_dataset(full_dataset)
         test_dataset = ImageFolder(test_dir, data_transforms['test'])
 
-        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, full_dataset)
+        weight_sampler = get_WeightedRandom_Sampler(train_dataset, full_dataset)
         train_loader = torch.utils.data.DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
                                                    num_workers=num_workers, pin_memory=pin_memory)
         val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers,
@@ -302,28 +226,7 @@ class DatasetLoader:
                 Data: 613 images -> Batch size to use: 8 to 16  -> Test set batch can more than training
                 Works best: 4 - 8
         """
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        data_transforms = {
-            'train': transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
-                transforms.RandomRotation(30),
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2),
-                transforms.CenterCrop(256),
-                transforms.RandomCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-            'val': transforms.Compose([
-                transforms.CenterCrop(256),
-                transforms.RandomCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-            'test': transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-        }
+        data_transforms = get_default_transforms()
 
         train_dir = os.path.join(self.data_dir, 'ccts', 'train')
         test_dir = os.path.join(self.data_dir, 'ccts', 'test')
@@ -333,7 +236,12 @@ class DatasetLoader:
         test_dataset = ImageFolder(test_dir, data_transforms['test'])
         val_dataset = ImageFolder(valid_dir, data_transforms['val'])
 
-        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, train_dataset)
+        # # Preprocess the train_dataset
+        # train_dataset_cleaned = preprocess_dataset(train_dataset)
+        # # Convert the cleaned dataset back to ImageFolder format
+        # train_dataset = self.CustomImageDataset(train_dataset_cleaned, transform=data_transforms['train'])
+
+        weight_sampler = get_WeightedRandom_Sampler(train_dataset, train_dataset)
         train_loader = torch.utils.data.DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
                                                    num_workers=num_workers, pin_memory=pin_memory)
         val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers,
@@ -349,26 +257,7 @@ class DatasetLoader:
                 https://www.kaggle.com/datasets/mohamedhanyyy/chest-ctscan-images
 
         """
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        data_transforms = {
-            'train': transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
-                transforms.CenterCrop(256),
-                transforms.RandomCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-            'val': transforms.Compose([
-                transforms.CenterCrop(256),
-                transforms.RandomCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-            'test': transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-        }
+        data_transforms = get_default_transforms()
 
         train_dir = os.path.join(self.data_dir, 'chest_xray', 'train')
         test_dir = os.path.join(self.data_dir, 'chest_xray', 'test')
@@ -378,7 +267,7 @@ class DatasetLoader:
         test_dataset = ImageFolder(test_dir, data_transforms['test'])
         val_dataset = ImageFolder(valid_dir, data_transforms['val'])
 
-        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, train_dataset)
+        weight_sampler = get_WeightedRandom_Sampler(train_dataset, train_dataset)
         train_loader = torch.utils.data.DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
                                                    num_workers=num_workers, pin_memory=pin_memory)
         val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers,
@@ -396,26 +285,7 @@ class DatasetLoader:
         Loads the ROTC dataset and returns DataLoaders for the training, validation, and test datasets.
 
         """
-        normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        data_transforms = {
-            'train': transforms.Compose([
-                transforms.RandomHorizontalFlip(),
-                transforms.RandomVerticalFlip(),
-                transforms.CenterCrop(256),
-                transforms.RandomCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-            'val': transforms.Compose([
-                transforms.CenterCrop(256),
-                transforms.RandomCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-            'test': transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize]),
-        }
+        data_transforms = get_default_transforms()
 
         train_dir = os.path.join(self.data_dir, 'rotc', 'train')
         val_dir = os.path.join(self.data_dir, 'rotc', 'val')
@@ -425,7 +295,7 @@ class DatasetLoader:
         val_dataset = ImageFolder(val_dir, data_transforms['val'])
         test_dataset = ImageFolder(test_dir, data_transforms['test'])
 
-        weight_sampler = self.get_WeightedRandom_Sampler(train_dataset, train_dataset)
+        weight_sampler = get_WeightedRandom_Sampler(train_dataset, train_dataset)
         train_loader = torch.utils.data.DataLoader(train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
                                                    num_workers=num_workers, pin_memory=pin_memory)
         val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=val_batch_size, num_workers=num_workers,
@@ -458,159 +328,24 @@ class DatasetLoader:
         train_dataset, val_split_dataset, test_dataset = self.split_dataset(train_dataset)
         return train_dataset, val_split_dataset, test_dataset, None
 
-    @staticmethod
-    def split_dataset(dataset: Union[Dataset, Tuple[Dataset, ...], Sized]) -> Tuple[
-        Optional[Dataset], Optional[Dataset], Optional[Dataset]]:
-        """
-        Splits the dataset into training, validation, and test sets based on specified proportions.
-        If the dataset cannot be split (e.g., it is None or empty), returns a tuple of (None, None, None).
 
-        """
-        if dataset is None or len(dataset) == 0:
-            return None, None, None
 
-        if isinstance(dataset, tuple):
-            # Ensure all elements are instances of Dataset or None
-            if all(isinstance(d, (Dataset, type(None))) for d in dataset):
-                # Explicitly cast to the expected tuple type
-                return cast(Tuple[Optional[Dataset], Optional[Dataset], Optional[Dataset]], dataset)
-            else:
-                raise ValueError("All elements of the input tuple must be torch.utils.data.Dataset instances or None.")
 
-        train_size = int(0.7 * len(dataset))  # 70% of the dataset for training
-        val_size = int(0.15 * len(dataset))  # 15% of the dataset for validation
-        test_size = len(dataset) - train_size - val_size  # Remaining for testing
-
-        # Ensure there is enough data to split according to the specified proportions
-        if train_size > 0 and val_size > 0 and test_size > 0:
-            train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
-            return train_dataset, val_dataset, test_dataset
-        else:
-            raise ValueError("Dataset is too small to be split into train, "
-                             "validation, and test sets with the specified proportions.")
-
-    def get_input_channels(self, train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory):
-        """
-        Retrieves the number of input channels from the training dataset.
-
-        Args:
-            train_batch_size (int): Batch size for the training DataLoader.
-            val_batch_size (int): Batch size for the validation DataLoader.
-            test_batch_size (int): Batch size for the test DataLoader.
-            num_workers (int): Number of worker processes for data loading.
-            pin_memory (bool): Whether to use pinned memory for data loading.
-
-        Returns:
-            int: The number of input channels in the dataset.
-        """
-        train_loader, val_loader, test_loader = self.load(train_batch_size, val_batch_size, test_batch_size,
-                                                          num_workers, pin_memory)
-        train_dataset = train_loader.dataset
-        sample_img, _ = train_dataset[0]
-        return sample_img.shape[0]
-
-    @staticmethod
-    def get_WeightedRandom_Sampler(subset_dataset, original_dataset):
-        # Access the original dataset from the Subset object
-        original_dataset = original_dataset.dataset if isinstance(original_dataset,
-                                                                  torch.utils.data.Subset) else original_dataset
-
-        dataLoader = DataLoader(subset_dataset, batch_size=512)
-
-        All_target = []
-        for _, (_, targets) in enumerate(dataLoader):
-            for i in range(targets.shape[0]):
-                All_target.append(targets[i].item())
-
-        target = np.array(All_target)
-        logging.info("\nClass distribution in the dataset:")
-        for i, class_name in enumerate(original_dataset.classes):
-            logging.info(f"{np.sum(target == i)}: {class_name}")
-
-        class_sample_count = np.array(
-            [len(np.where(target == t)[0]) for t in np.unique(target)])
-
-        weight = 1. / class_sample_count
-
-        samples_weight = np.array([weight[t] for t in target])
-        samples_weight = torch.from_numpy(samples_weight)
-        samples_weight = samples_weight.double()
-
-        Sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
-
-        return Sampler
-
-    @staticmethod
-    def get_dataloader_target_class_number(dataLoader):
-        if DatasetLoader._dataset_instance is None:
-            raise ValueError("DatasetLoader instance is not initialized.")
-
-        # Access the original dataset from the Subset object
-        original_dataset = dataLoader.dataset
-        if isinstance(original_dataset, torch.utils.data.Subset):
-            original_dataset = original_dataset.dataset
-
-        All_target_2 = []
-        for batch_idx, (inputs, targets) in enumerate(dataLoader):
-            for i in range(targets.shape[0]):
-                All_target_2.append(targets[i].item())
-
-        data = np.array(All_target_2)
-        unique_classes, counts = np.unique(data, return_counts=True)
-        logging.info("Unique classes and their counts in the dataset:")
-        for cls, count in zip(unique_classes, counts):
-            logging.info(f"{count}: {original_dataset.classes[cls]}")
-
-        return original_dataset.classes, len(original_dataset.classes)
 
     class CustomImageDataset(Dataset):
-        """
-       A custom dataset class for loading images from a specified directory, with associated labels.
 
-       Attributes:
-           root_dir (str): The root directory containing the images.
-           transform (callable, optional): A function/transform to apply to the images.
-           image_paths (list): List of paths to the image files.
-           labels (list): List of labels corresponding to the images.
+        def __init__(self, root_dir, name_mapping_file, survival_info_file, transform=None, validation=False,
+                     file_extension='.nii', label_extraction_func=None):
 
-       Methods:
-           __init__(root_dir, name_mapping_file, survival_info_file, transform=None, validation=False):
-               Initializes the dataset with the specified root directory and files.
-           load_data(root_dir, name_mapping_file, survival_info_file, validation):
-               Loads image paths and labels from the provided files.
-           __len__():
-               Returns the number of images in the dataset.
-           __getitem__(idx):
-               Retrieves an image and its label by index.
-       """
-
-        def __init__(self, root_dir, name_mapping_file, survival_info_file, transform=None, validation=False):
-            """
-            Initializes the CustomImageDataset with the specified root directory and files.
-
-            Args:
-                root_dir (str): The root directory containing the images.
-                name_mapping_file (str): Path to the CSV file mapping image names to labels.
-                survival_info_file (str): Path to the CSV file containing survival information.
-                transform (callable, optional): A function/transform to apply to the images. Defaults to None.
-                validation (bool, optional): Indicates if the dataset is for validation. Defaults to False.
-            """
             self.root_dir = root_dir
             self.transform = transform
             self.image_paths = []
             self.labels = []
+            self.file_extension = file_extension
+            self.label_extraction_func = label_extraction_func
             self.load_data(root_dir, name_mapping_file, survival_info_file, validation)
 
         def load_data(self, root_dir, name_mapping_file, survival_info_file, validation):
-            """
-            Loads image paths and labels from the provided files.
-
-            Args:
-                root_dir (str): The root directory containing the images.
-                name_mapping_file (str): Path to the CSV file mapping image names to labels.
-                survival_info_file (str): Path to the CSV file containing survival information.
-                validation (bool): Indicates if the dataset is for validation.
-            """
             name_mapping = pd.read_csv(name_mapping_file)
             survival_info = pd.read_csv(survival_info_file)
 
@@ -618,32 +353,18 @@ class DatasetLoader:
                 subject_id = row['BraTS_2020_subject_ID']
                 subject_dir = os.path.join(root_dir, str(subject_id))
                 for file in os.listdir(subject_dir):
-                    if file.endswith('.nii'):
+                    if file.endswith(self.file_extension):
                         self.image_paths.append(os.path.join(subject_dir, file))
-                        if 'seg' in file:
-                            self.labels.append(subject_id)
+                        if self.label_extraction_func:
+                            self.labels.append(self.label_extraction_func(file))
+                        else:
+                            if 'seg' in file:
+                                self.labels.append(subject_id)
 
         def __len__(self):
-            """
-            Returns the number of images in the dataset.
-
-            Returns:
-                int: The number of images in the dataset.
-            """
             return len(self.image_paths)
 
         def __getitem__(self, idx):
-            """
-           Retrieves an image and its label by index.
-
-           Args:
-               idx (int): The index of the image to retrieve.
-
-           Returns:
-               tuple: A tuple containing:
-                   - image (numpy.ndarray): The image data.
-                   - label (str): The label associated with the image.
-           """
             image_path = self.image_paths[idx]
             image = nib.load(image_path).get_fdata()
             image = np.expand_dims(image, axis=0)

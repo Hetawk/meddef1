@@ -180,3 +180,9 @@ cython_debug/
 #.idea/
 .DS_Store
 data/
+loader/dataset_work.txt
+loader/dfdfdfd.txt
+loader/updated_dataset_loader_for_config.txt
+loader/updated_dataset_loader_for_configt
+loader/backup_preprocess.py
+loader/data_analysis/dataset_analysis_results.txt
