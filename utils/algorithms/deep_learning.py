@@ -71,6 +71,8 @@ class DeepLearningAlgorithms:
             )
             self.fc1 = nn.Linear(8 * 8 * 32, 1000)
             self.fc2 = nn.Linear(1000, num_classes)
+            # Reduce batch size
+            self.batch_size = 2
 
         def forward(self, x):
             out = self.layer1(x)

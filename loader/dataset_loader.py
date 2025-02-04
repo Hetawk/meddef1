@@ -10,6 +10,8 @@ import torch
 from torchvision.datasets import ImageFolder
 import nibabel as nib
 from torch.utils.data import Dataset, DataLoader
+from arg_parser import get_args
+args = get_args()
 
 # Assume these functions are defined in preprocessing.py
 from loader.preprocessing import (
@@ -35,7 +37,12 @@ class DatasetLoader:
     """
 
     _dataset_instance = None
-    # pin_memory = True
+    # Check if the specified CUDA device is available
+    if args.device.type == 'cuda' and args.device.index is not None:
+        device_index = args.device_index
+        if device_index >= torch.cuda.device_count():
+            raise ValueError(
+                f"CUDA device index {device_index} is out of range. Available devices: {torch.cuda.device_count()}")
 
     def __new__(cls, dataset_name: str, data_dir: str = './dataset'):
         if cls._dataset_instance is None:
@@ -59,7 +66,7 @@ class DatasetLoader:
 
         self.dataset_name = dataset_name
         self.data_dir = data_dir
-        self.pin_memory = False
+        self.pin_memory = args.pin_memory
         self.datasets_dict: Dict[str, DatasetLoaderCallable] = {
             'ccts': self.load_ccts,
             'scisic': self.load_scisic,

@@ -1,3 +1,4 @@
+import utils.pandas_patch  # Added patch for pandas compatibility
 # main.py
 
 import logging
@@ -74,7 +75,7 @@ def get_hyperparams(args):
 
 def initialize_components(args):
     datasets_dict = DatasetLoader.get_all_datasets(args.data, args.data_dir)
-    models_dict = ModelLoader(args.device, args.arch, args.pretrained)
+    models_dict = ModelLoader(args.device, args.arch, args.pretrained, args.fp16)  # Pass the fp16 flag
     optimizers_dict = OptimizerLoader()
     lr_scheduler_loader = LRSchedulerLoader()
     return datasets_dict, models_dict, optimizers_dict, lr_scheduler_loader
@@ -128,6 +129,12 @@ def process_dataset(dataset_name, dataset_loader, args, models_dict, optimizers_
                 logging.error(f"Failed to load or create model {model_name_with_depth}.")
                 continue
 
+            # Removed duplicate call to transfer model to device,
+            # since get_model already returns the model on args.device.
+            # model = model.to(args.device)
+            
+            scaler = torch.cuda.amp.GradScaler()  # Initialize scaler for mixed precision training
+
             cross_validator = CrossValidator(
                 dataset=train_loader.dataset,
                 model=model,
@@ -178,6 +185,7 @@ def main():
         mp.set_start_method('forkserver')  # Use 'forkserver' for Unix-based systems
     args = get_args()
     setup_environment(args)
+    torch.cuda.empty_cache()  # Clear GPU cache
     hyperparams = get_hyperparams(args)
     datasets_dict, models_dict, optimizers_dict, lr_scheduler_loader = initialize_components(args)
 

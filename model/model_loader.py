@@ -12,12 +12,14 @@ from model.meddef.meddef import get_meddef
 from model.vgg_model import get_vgg
 from model.attention.MSARNet import MSARNet
 from model.attention.self_resnet import get_resnetsa
+from utils.memory_efficient_model import MemoryEfficientModel
 
 class ModelLoader:
-    def __init__(self, device, arch, pretrained=True):
+    def __init__(self, device, arch, pretrained=True, fp16=False):
         self.device = device
         self.arch = arch
         self.pretrained = pretrained
+        self.fp16 = fp16  # New flag for FP16 conversion
 
         # Define model architectures and their depths
         self.models_dict = {
@@ -47,8 +49,6 @@ class ModelLoader:
         checkpoints.sort(key=lambda x: os.path.getmtime(os.path.join(checkpoint_dir, x)), reverse=True)
         latest_checkpoint = checkpoints[0]
         return os.path.join(checkpoint_dir, latest_checkpoint)
-
-    # model_loader.py
 
     def get_model(self, model_name=None, depth=None, input_channels=3, num_classes=None, task_name=None,
                   dataset_name=None):
@@ -88,11 +88,12 @@ class ModelLoader:
                 model = model_func(**filtered_kwargs)
                 model.load_state_dict(checkpoint)
                 logging.info(f"Loaded pretrained model from checkpoint: {checkpoint_path}")
-                # Delete the checkpoint variable and free any cached memory
-                del checkpoint
+                # Free memory before moving the model to device
+                import gc
                 gc.collect()
                 torch.cuda.empty_cache()
-                # Now move the model to the specified device
+                if self.fp16:
+                    model = model.half()  # Convert model to half precision if enabled
                 model = model.to(self.device)
             else:
                 logging.info(f"No checkpoint found for {model_name_with_depth}. Creating a new model.")
@@ -102,13 +103,33 @@ class ModelLoader:
             model = model_func(**filtered_kwargs)
             logging.info(f"ModelLoader: Created a new model: {model_name_with_depth}")
 
-        # Move the model to the specified device
-        if torch.cuda.is_available():
-            model = model.to(self.device)
+        # Aggressive memory optimization
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        try:
+            # Create a wrapper for memory-efficient loading
+            model_builder = lambda: model_func(**filtered_kwargs)
+            wrapper = MemoryEfficientModel(model_builder, self.device, self.fp16)
+            
+            # Load the model using the wrapper
+            model = wrapper.load_model()
+            logging.info(f"Successfully loaded model using memory-efficient wrapper")
+            
+        except Exception as e:
+            logging.error(f"Error loading model: {str(e)}")
+            raise RuntimeError(f"Could not load model due to: {str(e)}")
 
         return model, model_name_with_depth
 
-
+    def recursive_set_param(self, model, key_parts, param):
+        """Recursively set parameter in nested model structure."""
+        if len(key_parts) == 1:
+            if hasattr(model, key_parts[0]):
+                setattr(model, key_parts[0], param)
+        else:
+            self.recursive_set_param(getattr(model, key_parts[0]), key_parts[1:], param)
 
     def load_pretrained_model(self, model_name, load_task, dataset_name, depth=None, input_channels=3, num_classes=None):
         """Loads a pretrained model, specified by architecture, depth, and task-related information."""
@@ -123,6 +144,9 @@ class ModelLoader:
 
         if torch.cuda.is_available() and torch.cuda.device_count() > 1:
             model = torch.nn.DataParallel(model)  # for multi-GPU use
+
+        scaler = torch.cuda.amp.GradScaler()  # Initialize GradScaler for mixed precision training
+        # ...remaining code unchanged...
 
         return model
 

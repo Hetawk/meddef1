@@ -8,8 +8,8 @@ def get_args():
 
     # Datasets
     parser.add_argument('-d', '--data', nargs='+', default=['ccts'], type=str)
-    parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
-                        help='number of data loading workers (default: 6)')
+    parser.add_argument('-j', '--workers', default=2, type=int, metavar='N',
+                        help='number of data loading workers (default: 2)')
     parser.add_argument('--data_dir', default='./dataset', type=str, metavar='PATH', help='path to dataset')
     parser.add_argument('--use_cross_validator', action='store_true', help='Use cross validation')
 
@@ -17,8 +17,8 @@ def get_args():
     parser.add_argument('--epochs', default=3, type=int, metavar='N', help='number of total epochs to run')
     parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                         help='manual epoch number (useful on restarts)')
-    parser.add_argument('--train-batch', default=64, type=int, metavar='N', help='train batchsize (default: 64)')
-    parser.add_argument('--test-batch', default=32, type=int, metavar='N', help='test batchsize (default: 32)')
+    parser.add_argument('--train-batch', default=2, type=int, metavar='N', help='train batchsize (default: 2)')
+    parser.add_argument('--test-batch', default=2, type=int, metavar='N', help='test batchsize (default: 2)')
     parser.add_argument('--lr', '--learning-rate', default=0.01, type=float, metavar='LR', help='initial learning rate')
     parser.add_argument('--drop', '--dropout', default=0, type=float, metavar='Dropout', help='Dropout ratio')
     parser.add_argument('--schedule', type=int, nargs='+', default=[150, 225],
@@ -29,7 +29,15 @@ def get_args():
                         help='weight decay (default: 1e-4)')
     parser.add_argument('--patience', default=5, type=int, metavar='N', help='patience for early stopping')
     parser.add_argument('--lambda_l2', default=0.01, type=float, metavar='L2', help='L2 regularization lambda')
-    parser.add_argument('--accumulation_steps', default=1, type=int, help='Number of gradient accumulation steps')
+    parser.add_argument('--accumulation_steps', default=16, type=int, help='Number of gradient accumulation steps')
+
+    # Memory optimization options
+    parser.add_argument('--cpu-offload', action='store_true', default=False,
+                        help='Offload model to CPU when not in use')
+    parser.add_argument('--optimize-memory', action='store_true', default=False,
+                        help='Enable memory optimization techniques')
+    parser.add_argument('--gradient-checkpointing', action='store_true', default=False,
+                        help='Enable gradient checkpointing to save memory')
 
     # Checkpoints
     parser.add_argument('-c', '--checkpoint', default='checkpoint', type=str, metavar='PATH',

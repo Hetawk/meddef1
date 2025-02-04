@@ -10,7 +10,7 @@ from gan.defense.adv_train import AdversarialTraining
 from training_logger import TrainingLogger
 from utils.robustness.regularization import Regularization
 from utils.timer import Timer
-# from utils.algorithms.supervised import SupervisedLearning
+from utils.algorithms.supervised import SupervisedLearning
 
 class Trainer:
     def __init__(self, model, train_loader, val_loader, test_loader, optimizer, criterion, model_name, task_name,
