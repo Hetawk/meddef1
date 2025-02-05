@@ -73,7 +73,9 @@ class DatasetLoader:
             'rotc': self.load_rotc,
             'kvasir': self.load_kvasir,
             'dermnet': self.load_dermnet,
-            'chest_xray': self.load_chest_xray
+            'chest_xray': self.load_chest_xray,
+            'tbcr': self.load_tbcr,                     # added new dataset
+            'miccai_brats2020': self.load_miccai_brats2020  # added new dataset
             # Add more datasets here if needed.
         }
         if self.dataset_name not in self.datasets_dict:
@@ -144,6 +146,7 @@ class DatasetLoader:
         check_for_corrupted_images(test_dir, data_transforms['test'])
 
         full_dataset = ImageFolder(train_dir, data_transforms['train'])
+        # Explicitly capture train and validation splits (ignore extra test partition from split)
         train_dataset, val_dataset, _ = split_dataset(full_dataset)
         test_dataset = ImageFolder(test_dir, data_transforms['test'])
 
@@ -305,7 +308,7 @@ class DatasetLoader:
                   pin_memory: bool
                   ) -> Tuple[DataLoader, DataLoader, DataLoader]:
         """
-        Loads the Retinal OCT Images (ROTC) dataset and returns DataLoaders.
+        Loads the Retinal OCT Images (ROTC) dataset and returns DataLoaders for training, validation, and test sets.
         """
         data_transforms = get_default_transforms()
 
@@ -329,6 +332,68 @@ class DatasetLoader:
             test_dataset, batch_size=test_batch_size, num_workers=num_workers, pin_memory=pin_memory
         )
 
+        return train_loader, val_loader, test_loader
+
+    def load_tbcr(self,
+                  train_batch_size: int,
+                  val_batch_size: int,
+                  test_batch_size: int,
+                  num_workers: int,
+                  pin_memory: bool
+                  ) -> Tuple[DataLoader, DataLoader, DataLoader]:
+        """
+        Loads the TBCR dataset from the 'tbcr' directory and returns DataLoaders.
+        Assumes that the 'tbcr' folder contains class folders (e.g., Normal, Tuberculosis).
+        """
+        data_transforms = get_default_transforms()
+        tbcr_dir = os.path.join(self.data_dir, 'tbcr')
+        full_dataset = ImageFolder(tbcr_dir, data_transforms['train'])
+        train_dataset, val_dataset, test_dataset = split_dataset(full_dataset)
+        weight_sampler = get_WeightedRandom_Sampler(train_dataset, full_dataset)
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
+            num_workers=num_workers, pin_memory=pin_memory
+        )
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset, batch_size=val_batch_size, num_workers=num_workers, pin_memory=pin_memory
+        )
+        test_loader = torch.utils.data.DataLoader(
+            test_dataset, batch_size=test_batch_size, num_workers=num_workers, pin_memory=pin_memory
+        )
+        return train_loader, val_loader, test_loader
+
+    def load_miccai_brats2020(self,
+                               train_batch_size: int,
+                               val_batch_size: int,
+                               test_batch_size: int,
+                               num_workers: int,
+                               pin_memory: bool
+                               ) -> Tuple[DataLoader, DataLoader, DataLoader]:
+        """
+        Loads the MICCAI BraTS2020 dataset.
+        """
+        data_transforms = get_default_transforms()
+        train_dir = os.path.join(self.data_dir, 'miccai_brats2020', 'MICCAI_BraTS2020_TrainingData')
+        test_dir = os.path.join(self.data_dir, 'miccai_brats2020', 'MICCAI_BraTS2020_ValidationData')
+        
+        # Accept .nii and .nii.gz files
+        def is_nii_file(path: str) -> bool:
+            return path.lower().endswith(('.nii', '.nii.gz'))
+        
+        full_dataset = ImageFolder(train_dir, data_transforms['train'], is_valid_file=is_nii_file)
+        train_dataset, val_dataset, _ = split_dataset(full_dataset)
+        test_dataset = ImageFolder(test_dir, data_transforms['test'], is_valid_file=is_nii_file)
+        weight_sampler = get_WeightedRandom_Sampler(train_dataset, full_dataset)
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
+            num_workers=num_workers, pin_memory=pin_memory
+        )
+        val_loader = torch.utils.data.DataLoader(
+            val_dataset, batch_size=val_batch_size, num_workers=num_workers, pin_memory=pin_memory
+        )
+        test_loader = torch.utils.data.DataLoader(
+            test_dataset, batch_size=test_batch_size, num_workers=num_workers, pin_memory=pin_memory
+        )
         return train_loader, val_loader, test_loader
 
     def get_input_channels(self,

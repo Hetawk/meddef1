@@ -1,5 +1,6 @@
 # check.py  ## Check Datasets before preprocessing
 
+import logging
 import os
 import gc
 import csv
@@ -23,6 +24,16 @@ if not os.path.exists(FIGURES_DIR):
 TXT_RESULTS_FILE = "dataset_analysis_results.txt"
 CSV_RESULTS_FILE = "dataset_analysis_results.csv"
 
+SUPPORTED_EXTENSIONS = (
+    '.jpg', '.jpeg', '.png', '.ppm', '.bmp', '.pgm', 
+    '.tif', '.tiff', '.webp', '.nii', '.nii.gz'  # added .nii and .nii.gz
+)
+
+# Ensure the log directory exists
+log_file = os.path.join(os.path.dirname(__file__), "analysis_errors.log")
+log_dir = os.path.dirname(log_file)
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir, exist_ok=True)
 
 # --------------------------------------------------------------------
 # Helper Functions for Dataset Analysis
@@ -430,10 +441,81 @@ def save_results_csv(dataset_name, results, file_path=CSV_RESULTS_FILE):
     print(f"Results saved to CSV file {file_path}")
 
 
+def get_valid_files_recursive(directory):
+    """
+    Recursively search for valid files with supported extensions in the given directory.
+    """
+    valid_files = []
+    for root, _, files in os.walk(directory):
+        for file in files:
+            if file.lower().endswith(SUPPORTED_EXTENSIONS):
+                valid_files.append(os.path.join(root, file))
+    return valid_files
+
+def check_for_corrupted_images(directory, transform):
+    """
+    Checks for corrupted images in the given directory using a recursive file search.
+    """
+    valid_files = get_valid_files_recursive(directory)
+    if not valid_files:
+        classes = os.listdir(directory)  # list of class folders
+        logging.error(
+            f"Error analyzing {directory}: Found no valid file for the classes {', '.join(classes)}. Supported extensions are: {', '.join(SUPPORTED_EXTENSIONS)}"
+        )
+        return
+    for file_path in valid_files:
+        try:
+            # ...existing logic to open and transform image...
+            pass
+        except Exception as e:
+            logging.error(f"Corrupted file detected: {file_path} | Error: {e}")
+
 # --------------------------------------------------------------------
 # Main Dataset Analysis Function
 # --------------------------------------------------------------------
 def analyze_dataset(dataset_name, data_dir):
+    # List all immediate subdirectories in the dataset directory
+    subdirs = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
+    
+    # Strategy 1: assume subdirectories are classes; check if each contains valid files
+    class_files = defaultdict(list)
+    for sub in subdirs:
+        sub_path = os.path.join(data_dir, sub)
+        valid_files = []
+        for root, _, files in os.walk(sub_path):
+            for file in files:
+                if file.lower().endswith(SUPPORTED_EXTENSIONS):
+                    valid_files.append(os.path.join(root, file))
+        if valid_files:
+            class_files[sub].extend(valid_files)
+    
+    if class_files:
+        print(f"Found {len(class_files)} classes in {dataset_name}:")
+        for cls, files in class_files.items():
+            print(f"  {cls}: {len(files)} files")
+        dataset_files = sum(class_files.values(), [])
+    else:
+        # Strategy 2: Fallback: treat each immediate subdirectory as a sample folder or scan the data_dir itself
+        dataset_files = []
+        if subdirs:
+            for sub in subdirs:
+                sub_path = os.path.join(data_dir, sub)
+                for root, _, files in os.walk(sub_path):
+                    for file in files:
+                        if file.lower().endswith(SUPPORTED_EXTENSIONS):
+                            dataset_files.append(os.path.join(root, file))
+            print(f"Found {len(dataset_files)} valid files in sample folders of {dataset_name}.")
+        else:
+            # No subdirectories found; scan the data_dir directly
+            for root, _, files in os.walk(data_dir):
+                for file in files:
+                    if file.lower().endswith(SUPPORTED_EXTENSIONS):
+                        dataset_files.append(os.path.join(root, file))
+            print(f"Found {len(dataset_files)} valid files directly in {dataset_name}.")
+
+    if not dataset_files:
+        print(f"Error analyzing {dataset_name}: Found no valid file. Supported extensions are: {', '.join(SUPPORTED_EXTENSIONS)}")
+        return
     try:
         print(f"\nAnalyzing dataset: {dataset_name}")
 
@@ -509,7 +591,7 @@ def analyze_dataset(dataset_name, data_dir):
 
     except Exception as e:
         print(f"Error analyzing {dataset_name}: {str(e)}")
-        with open("analysis_errors.log", "a") as f:
+        with open(log_file, "a") as f:
             f.write(f"{dataset_name} failed: {str(e)}\n")
 
 
@@ -517,12 +599,13 @@ def analyze_dataset(dataset_name, data_dir):
 # Dataset Directories and Processing
 # --------------------------------------------------------------------
 dataset_dirs = {
-    'scisic_train': 'dataset/scisic/Train',
-    'ccts_train': 'dataset/ccts/train',
-    'rotc_train': 'dataset/rotc/train',
-    'kvasir_train': 'dataset/kvasir/train',
-    'chest_xray_train': 'dataset/chest_xray/train',
-    'tbcr_train': 'dataset/tbcr',
+    # 'scisic_train': 'dataset/scisic/Train',
+    # 'ccts_train': 'dataset/ccts/train',
+    # 'rotc_train': 'dataset/rotc/train',
+    # 'kvasir_train': 'dataset/kvasir/train',
+    # 'chest_xray_train': 'dataset/chest_xray/train',
+    # 'tbcr_train': 'dataset/tbcr',
+    'miccai_brats2020': 'dataset/miccai_brats2020/MICCAI_BraTS2020_TrainingData',
 }
 
 # Determine the project root (modify as needed)

@@ -86,7 +86,12 @@ class ModelLoader:
                 # Load the checkpoint to CPU first to avoid OOM issues
                 checkpoint = torch.load(checkpoint_path, map_location='cpu')
                 model = model_func(**filtered_kwargs)
-                model.load_state_dict(checkpoint)
+                # Strip "module." prefix if present in checkpoint keys
+                new_state_dict = {}
+                for k, v in checkpoint.items():
+                    new_key = k.replace("module.", "") if k.startswith("module.") else k
+                    new_state_dict[new_key] = v
+                model.load_state_dict(new_state_dict)
                 logging.info(f"Loaded pretrained model from checkpoint: {checkpoint_path}")
                 # Free memory before moving the model to device
                 import gc

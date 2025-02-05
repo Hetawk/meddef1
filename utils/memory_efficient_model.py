@@ -92,6 +92,9 @@ class MemoryEfficientModel:
             self._process_chunk(current_chunk, model)
 
     def _process_chunk(self, chunk, model):
+        total_chunk_params = len(chunk)
+        total_chunk_size = sum(param.numel() * param.element_size() for _, param in chunk)
+        logging.info(f"Processing chunk with {total_chunk_params} parameters ({total_chunk_size} bytes)...")
         for name, param in chunk:
             try:
                 # Pin memory and transfer in smallest possible units
@@ -114,7 +117,7 @@ class MemoryEfficientModel:
                 torch.cuda.empty_cache()
                 
             except Exception as e:
-                logging.error(f"Failed to process parameter {name}: {str(e)}")
+                logging.error(f"Failed to process parameter '{name}' in chunk (chunk size: {total_chunk_size} bytes): {str(e)}")
                 raise
 
     def _assemble_model_minimal_memory(self, model):

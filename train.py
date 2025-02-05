@@ -7,7 +7,7 @@ import numpy as np
 import random
 from torch.cuda.amp import GradScaler, autocast
 from gan.defense.adv_train import AdversarialTraining
-from training_logger import TrainingLogger
+from utils.training_logger import TrainingLogger
 from utils.robustness.regularization import Regularization
 from utils.timer import Timer
 from utils.algorithms.supervised import SupervisedLearning

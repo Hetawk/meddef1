@@ -34,3 +34,69 @@ training:
   lr: 0.01
   momentum: 0.9
   weight_decay: 1e-4
+
+datasets:
+  scisic_train:
+    resize: true
+    target_size: [512, 512]
+    padding: true
+    normalization:
+      mean: [0.7437659, 0.58653116, 0.58686644]
+      std: [0.08040085, 0.10757149, 0.12017569]
+    augmentation:
+      contrast_enhancement: true
+    class_balancing: weighted_loss
+    duplicate_removal: true
+  ccts_train:
+    resize: true
+    target_size: [512, 512]
+    padding: false
+    conversion: convert_to_3_channel
+    normalization:
+      mean: [0.323004, 0.32297248, 0.32300267]
+      std: [0.22162104, 0.22161943, 0.2216194]
+    duplicate_removal: true
+  rotc_train:
+    resize: true
+    target_size: [512, 512]
+    padding: true
+    conversion: convert_to_3_channel
+    normalization:
+      mean: [0.19338988, 0.19338988, 0.19338988]
+      std: [0.1933612, 0.1933612, 0.1933612]
+    duplicate_removal: true
+    enhancement:
+      brightness: enhance
+  kvasir_train:
+    resize: true
+    target_size: [512, 512]
+    padding: true
+    normalization:
+      mean: [0.48510954, 0.34737176, 0.30044696]
+      std: [0.29461348, 0.22394758, 0.19942161]
+    duplicate_removal: true
+  chest_xray_train:
+    resize: true
+    target_size: [512, 512]
+    padding: true
+    conversion: convert_to_3_channel
+    normalization:
+      mean: [0.48230693, 0.48230693, 0.48230693]
+      std: [0.22157896, 0.22157896, 0.22157896]
+    duplicate_removal: true
+  tbcr_train:
+    resize: false
+    conversion: convert_to_3_channel
+    normalization:
+      mean: [0.5013298, 0.5097307, 0.5125384]
+      std: [0.23488876, 0.23702013, 0.2381724]
+    duplicate_removal: true
+  miccai_brats2020_train:
+    resize: true
+    target_size: [240, 240]
+    padding: true
+    conversion: none
+    normalization:
+      mean: [0.5, 0.5, 0.5]
+      std: [0.25, 0.25, 0.25]
+    duplicate_removal: true

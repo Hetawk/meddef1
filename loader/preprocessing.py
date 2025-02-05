@@ -28,6 +28,12 @@ def load_config(config_path="config.yaml"):
     return config
 
 
+def load_preprocessing_config(config_path: str = "./loader/config.yaml") -> dict:
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f)
+    return config.get("datasets", {})
+
+
 # -----------------------------------------------------------------------------
 # Additional Preprocessing Functions
 # -----------------------------------------------------------------------------
@@ -174,6 +180,53 @@ def get_default_transforms(preproc_config: dict = None):
         )
     }
     return data_transforms
+
+
+def build_transforms(dataset_name: str, mode: str = "train"):
+    """
+    Build a transformation pipeline based on the YAML config for the given dataset.
+    mode: "train", "val", or "test"
+    """
+    config = load_preprocessing_config()
+    ds_cfg = config.get(dataset_name, {})
+    transform_list = []
+
+    # Conversion: if dataset includes grayscale images that need to be converted
+    if ds_cfg.get("conversion", "") == "convert_to_3_channel":
+        transform_list.append(transforms.Lambda(lambda img: img.convert("RGB") 
+                              if img.mode != "RGB" else img))
+    
+    # Resize and/or Padding
+    if ds_cfg.get("resize", False):
+        target_size = tuple(ds_cfg.get("target_size", [224, 224]))
+        if ds_cfg.get("padding", False):
+            transform_list.append(transforms.Resize(target_size))
+            transform_list.append(transforms.Pad(10))  # Example fixed padding; adjust as needed
+        else:
+            transform_list.append(transforms.Resize(target_size))
+
+    # Data augmentation for training
+    if mode == "train" and ds_cfg.get("augmentation", {}).get("contrast_enhancement", False):
+        transform_list.append(transforms.ColorJitter(contrast=0.5))
+
+    # Convert image to tensor
+    transform_list.append(transforms.ToTensor())
+
+    # Normalization
+    if "normalization" in ds_cfg:
+        norm_cfg = ds_cfg["normalization"]
+        transform_list.append(transforms.Normalize(mean=norm_cfg.get("mean", [0.5, 0.5, 0.5]),
+                                                    std=norm_cfg.get("std", [0.5, 0.5, 0.5])))
+
+    return transforms.Compose(transform_list)
+
+# Example function to preprocess a dataset directory
+def preprocess_dataset(dataset_dir: str, dataset_name: str, mode: str = "train"):
+    transform = build_transforms(dataset_name, mode)
+    # For example, use ImageFolder with the transform pipeline.
+    from torchvision.datasets import ImageFolder
+    dataset = ImageFolder(root=dataset_dir, transform=transform)
+    return dataset
 
 
 # -----------------------------------------------------------------------------
