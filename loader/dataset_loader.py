@@ -380,9 +380,20 @@ class DatasetLoader:
         def is_nii_file(path: str) -> bool:
             return path.lower().endswith(('.nii', '.nii.gz'))
         
-        full_dataset = ImageFolder(train_dir, data_transforms['train'], is_valid_file=is_nii_file)
+        # Custom loader for NIfTI files using nibabel
+        def nifti_loader(path: str):
+            img = nib.load(path).get_fdata()
+            # If image is 3D, select the first slice or process accordingly
+            if img.ndim == 3:
+                img = img[..., 0]
+            # Convert to 8-bit; adjust conversion as needed
+            img = (img - img.min()) / (img.max() - img.min() + 1e-8) * 255
+            from PIL import Image
+            return Image.fromarray(img.astype('uint8'))
+        
+        full_dataset = ImageFolder(train_dir, data_transforms['train'], is_valid_file=is_nii_file, loader=nifti_loader)
         train_dataset, val_dataset, _ = split_dataset(full_dataset)
-        test_dataset = ImageFolder(test_dir, data_transforms['test'], is_valid_file=is_nii_file)
+        test_dataset = ImageFolder(test_dir, data_transforms['test'], is_valid_file=is_nii_file, loader=nifti_loader)
         weight_sampler = get_WeightedRandom_Sampler(train_dataset, full_dataset)
         train_loader = torch.utils.data.DataLoader(
             train_dataset, sampler=weight_sampler, batch_size=train_batch_size,

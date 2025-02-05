@@ -470,6 +470,10 @@ def check_for_corrupted_images(directory, transform):
         except Exception as e:
             logging.error(f"Corrupted file detected: {file_path} | Error: {e}")
 
+# Insert the custom valid-file check:
+def is_nii_file(path: str) -> bool:
+    return path.lower().endswith(('.nii', '.nii.gz'))
+
 # --------------------------------------------------------------------
 # Main Dataset Analysis Function
 # --------------------------------------------------------------------
@@ -491,8 +495,10 @@ def analyze_dataset(dataset_name, data_dir):
     
     if class_files:
         print(f"Found {len(class_files)} classes in {dataset_name}:")
-        for cls, files in class_files.items():
-            print(f"  {cls}: {len(files)} files")
+        # Comment out or remove the lines that log class details
+        # logging.info("Found {} classes in miccai_brats2020:".format(len(classes)))
+        # for cls, count in class_details:
+        #     logging.info(f"  {cls}: {count} files")
         dataset_files = sum(class_files.values(), [])
     else:
         # Strategy 2: Fallback: treat each immediate subdirectory as a sample folder or scan the data_dir itself
@@ -526,7 +532,7 @@ def analyze_dataset(dataset_name, data_dir):
         ])
 
         # Load dataset and create dataloader
-        dataset = datasets.ImageFolder(root=data_dir, transform=transform)
+        dataset = datasets.ImageFolder(root=data_dir, transform=transform, is_valid_file=is_nii_file)
         loader = torch.utils.data.DataLoader(
             dataset,
             batch_size=32,
@@ -599,12 +605,12 @@ def analyze_dataset(dataset_name, data_dir):
 # Dataset Directories and Processing
 # --------------------------------------------------------------------
 dataset_dirs = {
-    # 'scisic_train': 'dataset/scisic/Train',
-    # 'ccts_train': 'dataset/ccts/train',
-    # 'rotc_train': 'dataset/rotc/train',
-    # 'kvasir_train': 'dataset/kvasir/train',
-    # 'chest_xray_train': 'dataset/chest_xray/train',
-    # 'tbcr_train': 'dataset/tbcr',
+    'scisic_train': 'dataset/scisic/Train',
+    'ccts_train': 'dataset/ccts/train',
+    'rotc_train': 'dataset/rotc/train',
+    'kvasir_train': 'dataset/kvasir/train',
+    'chest_xray_train': 'dataset/chest_xray/train',
+    'tbcr_train': 'dataset/tbcr',
     'miccai_brats2020': 'dataset/miccai_brats2020/MICCAI_BraTS2020_TrainingData',
 }
 
