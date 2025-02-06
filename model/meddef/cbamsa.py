@@ -92,6 +92,19 @@ class CBAMBottleneckBlock(CNNBlockBase):
         out = F.relu_(out)
         return out
 
+class CBAMSA(nn.Module):
+    def __init__(self, in_channels, out_channels=16, kernel_size=1):  # added in_channels parameter
+        super(CBAMSA, self).__init__()
+        # Use the provided in_channels for conv1 instead of hard-coded 64
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size)
+        # ...existing code...
+    
+    def forward(self, x):
+        # ...existing code...
+        out = self.conv1(x)
+        # ...existing code...
+        return out
+
 # Check if CBAMResNet is already registered
 if "CBAMResNet" not in BACKBONE_REGISTRY:
     @BACKBONE_REGISTRY.register()

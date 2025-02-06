@@ -1,6 +1,5 @@
 # model_loader.py
 
-import gc
 import os
 import torch
 import logging
@@ -8,10 +7,10 @@ import logging
 from model.backbone.cbam.resnet_cbam import get_resnet_with_cbam
 from model.backbone.resnet import get_resnet
 from model.densenet_model import get_densenet
-from model.meddef.meddef import get_meddef
+from model.meddef.meddef2 import get_meddef2
 from model.vgg_model import get_vgg
 from model.attention.MSARNet import MSARNet
-from model.attention.self_resnet import get_resnetsa
+from model.meddef.meddef1 import get_meddef1
 from utils.memory_efficient_model import MemoryEfficientModel
 
 class ModelLoader:
@@ -28,8 +27,8 @@ class ModelLoader:
             'vgg': {'func': get_vgg, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'msarnet': {'func': MSARNet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'cbam_resnet': {'func': get_resnet_with_cbam, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
-            'meddef': {'func': get_meddef, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
-            'resnetsa': {'func': get_resnetsa, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']}
+            'meddef1': {'func': get_meddef1, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
+            'meddef2': {'func': get_meddef2, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']}
         }
         logging.info("ModelLoader initialized with models: " + ", ".join(self.models_dict.keys()))
 

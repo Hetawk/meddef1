@@ -111,7 +111,7 @@ class MemoryEfficientModel:
                 current = model
                 for part in parent_path:
                     current = getattr(current, part)
-                setattr(current, param_name, param_gpu)
+                setattr(current, param_name, torch.nn.Parameter(param_gpu))
                 
                 del param_cpu
                 torch.cuda.empty_cache()
