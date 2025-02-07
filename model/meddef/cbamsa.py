@@ -67,14 +67,19 @@ class CBAMBottleneckBlock(CNNBlockBase):
 
     def __init__(self, in_channels, out_channels, *, bottleneck_channels=None, stride=1, num_groups=1, norm="BN", stride_in_1x1=False, dilation=1):
         super().__init__(in_channels, out_channels, stride)
-        self.shortcut = None if in_channels == out_channels else Conv2d(in_channels, out_channels, kernel_size=1, stride=stride, bias=False, norm=get_norm(norm, out_channels))
+        # Update shortcut to match output channels = out_channels * expansion
+        if in_channels != out_channels * self.expansion:
+            self.shortcut = Conv2d(in_channels, out_channels * self.expansion, kernel_size=1, stride=stride, bias=False, norm=get_norm(norm, out_channels * self.expansion))
+        else:
+            self.shortcut = None
         bottleneck_channels = bottleneck_channels or out_channels // 4
         stride_1x1, stride_3x3 = (stride, 1) if stride_in_1x1 else (1, stride)
         self.conv1 = Conv2d(in_channels, bottleneck_channels, kernel_size=1, stride=stride_1x1, bias=False, norm=get_norm(norm, bottleneck_channels))
         self.conv2 = Conv2d(bottleneck_channels, bottleneck_channels, kernel_size=3, stride=stride_3x3, padding=1 * dilation, bias=False, groups=num_groups, dilation=dilation, norm=get_norm(norm, bottleneck_channels))
-        self.conv3 = Conv2d(bottleneck_channels, out_channels, kernel_size=1, bias=False, norm=get_norm(norm, out_channels))
-        self.cbam = CBAM(out_channels, reduction_ratio=16)
-        self.self_attention = SelfAttention(out_channels)
+        # Change: output channels = out_channels * expansion
+        self.conv3 = Conv2d(bottleneck_channels, out_channels * self.expansion, kernel_size=1, bias=False, norm=get_norm(norm, out_channels * self.expansion))
+        self.cbam = CBAM(out_channels * self.expansion, reduction_ratio=16)
+        self.self_attention = SelfAttention(out_channels * self.expansion)
         for layer in [self.conv1, self.conv2, self.conv3, self.shortcut]:
             if layer is not None:
                 weight_init.c2_msra_fill(layer)

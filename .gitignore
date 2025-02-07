@@ -15,6 +15,19 @@ philip/
 data/
 .idea
 meddef.zip
+# Ignore specific files and directories in the loader folder
+loader/updated_dataset_loader_for_config
+loader/updated_dataset_loader_for_config.txt
+loader/dataset_work.txt
+loader/backup_preprocess.py
+loader/dfdfdfd.txt
+
+# Ignore __pycache__ directories anywhere
+**/__pycache__/
+__pycache__/train.cpython-312.pyc
+
+# Ignore analysis figures directory inside loader/data_analysis
+loader/data_analysis/analysis_figures/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

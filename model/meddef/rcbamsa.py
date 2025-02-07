@@ -10,7 +10,8 @@ class ResNetCBAMSA(nn.Module):
     def __init__(self, block: Union[Type[CBAMBasicBlock], Type[CBAMBottleneckBlock]], layers: Tuple[int, int, int, int],
                  num_classes: int, input_channels: int = 3, robust_method: Optional[BaseRobustMethod] = None):
         super(ResNetCBAMSA, self).__init__()
-        self.in_channels = 64 if block == CBAMBasicBlock else 256
+        # Set in_channels to 64 regardless of block type; conv1 output is 64 channels.
+        self.in_channels = 64
         self.block_expansion = block.expansion
         self.conv1 = nn.Conv2d(input_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
         self.bn1 = nn.BatchNorm2d(64)
