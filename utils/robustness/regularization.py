@@ -27,12 +27,11 @@ class Regularization:
         """
         if log_message:
             print("\n")
-            logging.info(f"Applying L2 regularization with strength: {lambda_l2}")
-        l2_reg = torch.tensor(0., device=next(model.parameters()).device)
-        for param in model.parameters():
-            if param.requires_grad:
-                l2_reg += torch.sum(param ** 2)
-        return lambda_l2 * l2_reg
+            logging.info(
+                f"Applying L2 regularization with strength: {lambda_l2}")
+        l2_norm = sum(p.pow(2.0).sum() for p in model.parameters())
+        # Ensure lambda_l2 is consistent with your configuration (e.g. 0.001)
+        return lambda_l2 * l2_norm
 
     @staticmethod
     def apply_dropout(model, dropout_rate):

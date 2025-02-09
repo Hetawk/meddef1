@@ -1,5 +1,12 @@
 # dataset_loader.py
 
+from loader.preprocessing import (
+    get_default_transforms,
+    preprocess_dataset,
+    get_WeightedRandom_Sampler,
+    split_dataset,
+    check_for_corrupted_images
+)
 import os
 import logging
 from typing import Tuple, Dict, List, Callable
@@ -11,16 +18,11 @@ from torchvision.datasets import ImageFolder
 import nibabel as nib
 from torch.utils.data import Dataset, DataLoader
 from arg_parser import get_args
+import yaml
+
 args = get_args()
 
 # Assume these functions are defined in preprocessing.py
-from loader.preprocessing import (
-    get_default_transforms,
-    preprocess_dataset,
-    get_WeightedRandom_Sampler,
-    split_dataset,
-    check_for_corrupted_images
-)
 
 # Define a type alias for dataset-loading callables:
 DatasetLoaderCallable = Callable[
@@ -29,11 +31,42 @@ DatasetLoaderCallable = Callable[
 ]
 
 
+def load_config(config_path="./loader/config.yaml"):
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
+
+
+def get_dataset_paths(dataset_name: str):
+    config = load_config()
+    ds_cfg = next((ds for ds in config.get("data", {}).get(
+        "data_key", []) if ds["name"] == dataset_name), None)
+    if ds_cfg is None:
+        raise ValueError(f"Dataset {dataset_name} not found in config.")
+
+    base_dir = os.path.join(config.get("data", {}).get(
+        "data_dir", "./dataset"), dataset_name)
+    structure = ds_cfg.get("structure", {})
+
+    # Determine train, validation, and test paths using structure keys.
+    train_dir = os.path.join(base_dir, structure.get("train", "train"))
+    val_dir = os.path.join(base_dir, structure.get(
+        "val", structure.get("valid", "")))
+    test_dir = os.path.join(base_dir, structure.get("test", "test"))
+
+    # For datasets with alternative structure, e.g. tbcr
+    if "primary" in structure:
+        train_dir = os.path.join(base_dir, structure.get("primary"))
+        alt_dir = os.path.join(base_dir, structure.get("alternative", ""))
+        return {"train": train_dir, "alternative": alt_dir}
+
+    return {"train": train_dir, "val": val_dir, "test": test_dir}
+
+
 class DatasetLoader:
     """
     A class to manage and load various datasets for machine learning tasks.
 
-    Supported datasets include: 'ccts', 'scisic', 'rotc', 'kvasir', 'dermnet', 'chest_xray'.
+    Supported datasets include: 'ccts', 'scisic', 'rotc', 'kvasir', 'dermnet', 'chest_xray', 'tbcr', 'miccai_brats2020'.
     """
 
     _dataset_instance = None
@@ -138,8 +171,9 @@ class DatasetLoader:
         """
         data_transforms = get_default_transforms()
 
-        train_dir = os.path.join(self.data_dir, 'scisic', 'Train')
-        test_dir = os.path.join(self.data_dir, 'scisic', 'Test')
+        paths = get_dataset_paths('scisic')
+        train_dir = paths['train']
+        test_dir = paths['test']
 
         # Check for corrupted images
         check_for_corrupted_images(train_dir, data_transforms['train'])
@@ -150,7 +184,8 @@ class DatasetLoader:
         train_dataset, val_dataset, _ = split_dataset(full_dataset)
         test_dataset = ImageFolder(test_dir, data_transforms['test'])
 
-        weight_sampler = get_WeightedRandom_Sampler(train_dataset, full_dataset)
+        weight_sampler = get_WeightedRandom_Sampler(
+            train_dataset, full_dataset)
         train_loader = torch.utils.data.DataLoader(
             train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
             num_workers=num_workers, pin_memory=pin_memory
@@ -176,13 +211,18 @@ class DatasetLoader:
         """
         data_transforms = get_default_transforms()
 
-        train_dir = os.path.join(self.data_dir, 'kvasir', 'train')
+        paths = get_dataset_paths('kvasir')
+        train_dir = paths['train']
+        val_dir = paths['val']
+        test_dir = paths['test']
+
         check_for_corrupted_images(train_dir, data_transforms['train'])
 
         full_dataset = ImageFolder(train_dir, data_transforms['train'])
         train_dataset, val_dataset, test_dataset = split_dataset(full_dataset)
 
-        weight_sampler = get_WeightedRandom_Sampler(train_dataset, full_dataset)
+        weight_sampler = get_WeightedRandom_Sampler(
+            train_dataset, full_dataset)
         train_loader = torch.utils.data.DataLoader(
             train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
             num_workers=num_workers, pin_memory=pin_memory
@@ -208,8 +248,9 @@ class DatasetLoader:
         """
         data_transforms = get_default_transforms()
 
-        train_dir = os.path.join(self.data_dir, 'dermnet', 'train')
-        test_dir = os.path.join(self.data_dir, 'dermnet', 'test')
+        paths = get_dataset_paths('dermnet')
+        train_dir = paths['train']
+        test_dir = paths['test']
 
         check_for_corrupted_images(train_dir, data_transforms['train'])
         check_for_corrupted_images(test_dir, data_transforms['test'])
@@ -218,7 +259,8 @@ class DatasetLoader:
         train_dataset, val_dataset, _ = split_dataset(full_dataset)
         test_dataset = ImageFolder(test_dir, data_transforms['test'])
 
-        weight_sampler = get_WeightedRandom_Sampler(train_dataset, full_dataset)
+        weight_sampler = get_WeightedRandom_Sampler(
+            train_dataset, full_dataset)
         train_loader = torch.utils.data.DataLoader(
             train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
             num_workers=num_workers, pin_memory=pin_memory
@@ -244,15 +286,17 @@ class DatasetLoader:
         """
         data_transforms = get_default_transforms()
 
-        train_dir = os.path.join(self.data_dir, 'ccts', 'train')
-        test_dir = os.path.join(self.data_dir, 'ccts', 'test')
-        valid_dir = os.path.join(self.data_dir, 'ccts', 'valid')
+        paths = get_dataset_paths('ccts')
+        train_dir = paths['train']
+        test_dir = paths['test']
+        valid_dir = paths['val']
 
         train_dataset = ImageFolder(train_dir, data_transforms['train'])
         test_dataset = ImageFolder(test_dir, data_transforms['test'])
         val_dataset = ImageFolder(valid_dir, data_transforms['val'])
 
-        weight_sampler = get_WeightedRandom_Sampler(train_dataset, train_dataset)
+        weight_sampler = get_WeightedRandom_Sampler(
+            train_dataset, train_dataset)
         train_loader = torch.utils.data.DataLoader(
             train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
             num_workers=num_workers, pin_memory=pin_memory
@@ -278,15 +322,17 @@ class DatasetLoader:
         """
         data_transforms = get_default_transforms()
 
-        train_dir = os.path.join(self.data_dir, 'chest_xray', 'train')
-        test_dir = os.path.join(self.data_dir, 'chest_xray', 'test')
-        valid_dir = os.path.join(self.data_dir, 'chest_xray', 'val')
+        paths = get_dataset_paths('chest_xray')
+        train_dir = paths['train']
+        test_dir = paths['test']
+        valid_dir = paths['val']
 
         train_dataset = ImageFolder(train_dir, data_transforms['train'])
         test_dataset = ImageFolder(test_dir, data_transforms['test'])
         val_dataset = ImageFolder(valid_dir, data_transforms['val'])
 
-        weight_sampler = get_WeightedRandom_Sampler(train_dataset, train_dataset)
+        weight_sampler = get_WeightedRandom_Sampler(
+            train_dataset, train_dataset)
         train_loader = torch.utils.data.DataLoader(
             train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
             num_workers=num_workers, pin_memory=pin_memory
@@ -312,15 +358,17 @@ class DatasetLoader:
         """
         data_transforms = get_default_transforms()
 
-        train_dir = os.path.join(self.data_dir, 'rotc', 'train')
-        val_dir = os.path.join(self.data_dir, 'rotc', 'val')
-        test_dir = os.path.join(self.data_dir, 'rotc', 'test')
+        paths = get_dataset_paths('rotc')
+        train_dir = paths['train']
+        val_dir = paths['val']
+        test_dir = paths['test']
 
         train_dataset = ImageFolder(train_dir, data_transforms['train'])
         val_dataset = ImageFolder(val_dir, data_transforms['val'])
         test_dataset = ImageFolder(test_dir, data_transforms['test'])
 
-        weight_sampler = get_WeightedRandom_Sampler(train_dataset, train_dataset)
+        weight_sampler = get_WeightedRandom_Sampler(
+            train_dataset, train_dataset)
         train_loader = torch.utils.data.DataLoader(
             train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
             num_workers=num_workers, pin_memory=pin_memory
@@ -346,10 +394,15 @@ class DatasetLoader:
         Assumes that the 'tbcr' folder contains class folders (e.g., Normal, Tuberculosis).
         """
         data_transforms = get_default_transforms()
-        tbcr_dir = os.path.join(self.data_dir, 'tbcr')
-        full_dataset = ImageFolder(tbcr_dir, data_transforms['train'])
+
+        paths = get_dataset_paths('tbcr')
+        train_dir = paths['train']
+        alt_dir = paths['alternative']
+
+        full_dataset = ImageFolder(train_dir, data_transforms['train'])
         train_dataset, val_dataset, test_dataset = split_dataset(full_dataset)
-        weight_sampler = get_WeightedRandom_Sampler(train_dataset, full_dataset)
+        weight_sampler = get_WeightedRandom_Sampler(
+            train_dataset, full_dataset)
         train_loader = torch.utils.data.DataLoader(
             train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
             num_workers=num_workers, pin_memory=pin_memory
@@ -363,23 +416,25 @@ class DatasetLoader:
         return train_loader, val_loader, test_loader
 
     def load_miccai_brats2020(self,
-                               train_batch_size: int,
-                               val_batch_size: int,
-                               test_batch_size: int,
-                               num_workers: int,
-                               pin_memory: bool
-                               ) -> Tuple[DataLoader, DataLoader, DataLoader]:
+                              train_batch_size: int,
+                              val_batch_size: int,
+                              test_batch_size: int,
+                              num_workers: int,
+                              pin_memory: bool
+                              ) -> Tuple[DataLoader, DataLoader, DataLoader]:
         """
         Loads the MICCAI BraTS2020 dataset.
         """
         data_transforms = get_default_transforms()
-        train_dir = os.path.join(self.data_dir, 'miccai_brats2020', 'MICCAI_BraTS2020_TrainingData')
-        test_dir = os.path.join(self.data_dir, 'miccai_brats2020', 'MICCAI_BraTS2020_ValidationData')
-        
+
+        paths = get_dataset_paths('miccai_brats2020')
+        train_dir = paths['train']
+        test_dir = paths['test']
+
         # Accept .nii and .nii.gz files
         def is_nii_file(path: str) -> bool:
             return path.lower().endswith(('.nii', '.nii.gz'))
-        
+
         # Custom loader for NIfTI files using nibabel
         def nifti_loader(path: str):
             img = nib.load(path).get_fdata()
@@ -390,11 +445,14 @@ class DatasetLoader:
             img = (img - img.min()) / (img.max() - img.min() + 1e-8) * 255
             from PIL import Image
             return Image.fromarray(img.astype('uint8'))
-        
-        full_dataset = ImageFolder(train_dir, data_transforms['train'], is_valid_file=is_nii_file, loader=nifti_loader)
+
+        full_dataset = ImageFolder(
+            train_dir, data_transforms['train'], is_valid_file=is_nii_file, loader=nifti_loader)
         train_dataset, val_dataset, _ = split_dataset(full_dataset)
-        test_dataset = ImageFolder(test_dir, data_transforms['test'], is_valid_file=is_nii_file, loader=nifti_loader)
-        weight_sampler = get_WeightedRandom_Sampler(train_dataset, full_dataset)
+        test_dataset = ImageFolder(
+            test_dir, data_transforms['test'], is_valid_file=is_nii_file, loader=nifti_loader)
+        weight_sampler = get_WeightedRandom_Sampler(
+            train_dataset, full_dataset)
         train_loader = torch.utils.data.DataLoader(
             train_dataset, sampler=weight_sampler, batch_size=train_batch_size,
             num_workers=num_workers, pin_memory=pin_memory
@@ -417,7 +475,8 @@ class DatasetLoader:
         """
         Retrieves the number of input channels from the training dataset.
         """
-        train_loader, _, _ = self.load(train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory)
+        train_loader, _, _ = self.load(
+            train_batch_size, val_batch_size, test_batch_size, num_workers, pin_memory)
         train_dataset = train_loader.dataset
         sample_img, _ = train_dataset[0]
         return sample_img.shape[0]
@@ -437,7 +496,8 @@ class DatasetLoader:
             self.labels: List = []
             self.file_extension = file_extension
             self.label_extraction_func = label_extraction_func
-            self.load_data(root_dir, name_mapping_file, survival_info_file, validation)
+            self.load_data(root_dir, name_mapping_file,
+                           survival_info_file, validation)
 
         def load_data(self, root_dir: str, name_mapping_file: str, survival_info_file: str, validation: bool):
             name_mapping = pd.read_csv(name_mapping_file)
@@ -448,9 +508,11 @@ class DatasetLoader:
                 subject_dir = os.path.join(root_dir, str(subject_id))
                 for file in os.listdir(subject_dir):
                     if file.endswith(self.file_extension):
-                        self.image_paths.append(os.path.join(subject_dir, file))
+                        self.image_paths.append(
+                            os.path.join(subject_dir, file))
                         if self.label_extraction_func:
-                            self.labels.append(self.label_extraction_func(file))
+                            self.labels.append(
+                                self.label_extraction_func(file))
                         else:
                             if 'seg' in file:
                                 self.labels.append(subject_id)

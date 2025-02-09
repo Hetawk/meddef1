@@ -1,27 +1,21 @@
 # adv_train.py
 
 import torch
+from gan.attack.attack_loader import AttackLoader
+
 
 class AdversarialTraining:
-    def __init__(self, model, criterion, epsilon=0.3, alpha=0.01):
+    def __init__(self, model, criterion, args):
         self.model = model
         self.criterion = criterion
-        self.epsilon = epsilon  # Maximum perturbation
-        self.alpha = alpha  # Step size for gradient ascent
-
-    def generate_adversarial_example(self, data, target):
-        data.requires_grad = True
-        output = self.model(data)
-        loss = self.criterion(output, target)
-        self.model.zero_grad()
-        loss.backward()
-        data_grad = data.grad.data
-        perturbed_data = data + self.alpha * data_grad.sign()
-        perturbed_data = torch.clamp(perturbed_data, 0, 1)
-        return perturbed_data
+        self.args = args
+        # Instantiate AttackLoader and get the desired attack
+        self.attack_loader = AttackLoader(model, args)
+        self.attack = self.attack_loader.get_attack(args.attack_name)
 
     def adversarial_loss(self, data, target):
-        adv_data = self.generate_adversarial_example(data, target)
+        # Use the attack to generate adversarial examples
+        adv_data = self.attack.generate(data, target)
         adv_output = self.model(adv_data)
         adv_loss = self.criterion(adv_output, target)
         return adv_loss

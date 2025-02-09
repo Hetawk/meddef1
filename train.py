@@ -12,6 +12,7 @@ from utils.robustness.regularization import Regularization
 from utils.timer import Timer
 from utils.algorithms.supervised import SupervisedLearning
 
+
 class Trainer:
     def __init__(self, model, train_loader, val_loader, test_loader, optimizer, criterion, model_name, task_name,
                  dataset_name, device, args, attack_loader=None, scheduler=None, cross_validator=None, adversarial=False):
@@ -56,7 +57,8 @@ class Trainer:
         self.supervised_learning = SupervisedLearning()
         self.adversarial = adversarial
         if adversarial:
-            self.adversarial_training = AdversarialTraining(model, criterion, epsilon=0.3, alpha=0.01)
+            self.adversarial_training = AdversarialTraining(
+                model, criterion, epsilon=0.3, alpha=0.01)
         # Clear cache before starting
         torch.cuda.empty_cache()
         self.scaler = GradScaler()
@@ -66,7 +68,6 @@ class Trainer:
         self.set_random_seed(args.manualSeed)
         # Initialize TrainingLogger
         self.training_logger = TrainingLogger()
-
 
     def set_random_seed(self, seed):
         random.seed(seed)
@@ -80,7 +81,8 @@ class Trainer:
 
     def train(self, patience, adversarial=False):
         if self.has_trained:
-            logging.warning(f"{self.model} has already been trained. Training again will overwrite the existing model.")
+            logging.warning(
+                f"{self.model} has already been trained. Training again will overwrite the existing model.")
             return
         logging.info(f"Training {self.model_name}...")
         self.has_trained = True
@@ -115,14 +117,20 @@ class Trainer:
                     loss = loss / self.accumulation_steps  # Normalize loss
 
                 if self.adversarial:
-                    adv_loss = self.adversarial_training.adversarial_loss(data, target)
+                    adv_loss = self.adversarial_training.adversarial_loss(
+                        data, target)
                     loss += adv_loss
 
                 l2_reg = Regularization.apply_l2_regularization(self.model, self.lambda_l2,
                                                                 log_message=(batch_idx == 0))
-                loss = Regularization.integrate_regularization(loss, l2_reg, log_message=(batch_idx == 0))
+                loss = Regularization.integrate_regularization(
+                    loss, l2_reg, log_message=(batch_idx == 0))
 
                 self.scaler.scale(loss).backward()
+
+                # Added gradient clipping to stabilize training
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), self.args.max_grad_norm)
 
                 if (batch_idx + 1) % self.accumulation_steps == 0:
                     self.scaler.step(self.optimizer)
@@ -140,7 +148,8 @@ class Trainer:
                 if batch_idx in log_points:
                     accuracy = correct / total
                     end_time = datetime.now()
-                    duration = Timer.format_duration((end_time - start_time).total_seconds())
+                    duration = Timer.format_duration(
+                        (end_time - start_time).total_seconds())
                     logging.info(f'Epoch: {epoch + 1}/{self.epochs} '
                                  f'| Batch: {batch_idx * len(data)}/{len(self.train_loader.dataset)} '
                                  f'| Loss: {loss.item():.4f} | Accuracy: {accuracy:.4f} ')
@@ -149,7 +158,8 @@ class Trainer:
             accuracy = correct / total
             epoch_loss /= len(self.train_loader)
             end_time = datetime.now()
-            epoch_duration = Timer.format_duration((end_time - start_time).total_seconds())
+            epoch_duration = Timer.format_duration(
+                (end_time - start_time).total_seconds())
             logging.info(f'Epoch: {epoch + 1}/{self.epochs} | Loss: {epoch_loss:.4f}  | Accu: {accuracy:.4f}  '
                          f'| V_loss: {val_loss:.4f} | V_accu: {val_accuracy:.4f} '
                          f'| Duration: {epoch_duration}')
@@ -166,7 +176,8 @@ class Trainer:
             if epoch_loss < best_loss or val_loss < best_loss:
                 best_loss = epoch_loss
                 patience_counter = 0
-                self.save_model(f"save_model/best_{self.model_name}_{self.dataset_name}.pth")
+                self.save_model(
+                    f"save_model/best_{self.model_name}_{self.dataset_name}.pth")
             else:
                 patience_counter += 1
 
@@ -231,7 +242,8 @@ class Trainer:
                 data, target = data.to(self.device), target.to(self.device)
                 output = self.model(data)
                 test_loss += self.criterion(output, target).item()
-                pred = output.argmax(dim=1, keepdim=True)  # Use argmax to get predicted class indices
+                # Use argmax to get predicted class indices
+                pred = output.argmax(dim=1, keepdim=True)
                 correct += pred.eq(target.view_as(pred)).sum().item()
                 self.true_labels.extend(target.cpu().numpy())
                 self.predictions.extend(output.cpu().numpy())  # Store logits
@@ -241,7 +253,8 @@ class Trainer:
         logging.info(f'Test Loss: {test_loss:.4f}, Accuracy: {accuracy:.4f}')
 
         self.history['true_labels'][-1] = self.true_labels
-        self.history['predictions'][-1] = self.predictions  # Store logits, not predicted labels
+        # Store logits, not predicted labels
+        self.history['predictions'][-1] = self.predictions
         self.model.train()
         return test_loss, accuracy
 
@@ -250,16 +263,19 @@ class Trainer:
         # Include epochs, learning rate, batch size, and timestamp in the filename
         timestamp = datetime.now().strftime("%Y%m%d")
         filename = f"{filename}_epochs{self.epochs}_lr{self.args.lr}_batch{self.args.train_batch}_{timestamp}{ext}"
-        path = os.path.join('out', self.task_name, self.dataset_name, self.model_name, filename)
+        path = os.path.join('out', self.task_name,
+                            self.dataset_name, self.model_name, filename)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save(self.model.state_dict(), path)
         logging.info(f'Model saved to {path}')
 
     def save_history_to_csv(self, filename):
-        filename = os.path.join('out', self.task_name, self.dataset_name, self.model_name, filename)
+        filename = os.path.join('out', self.task_name,
+                                self.dataset_name, self.model_name, filename)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
 
-        keys_to_check = ['loss', 'accuracy', 'duration', 'val_loss', 'val_accuracy', 'true_labels', 'predictions']
+        keys_to_check = ['loss', 'accuracy', 'duration',
+                         'val_loss', 'val_accuracy', 'true_labels', 'predictions']
         for key in keys_to_check:
             if len(self.history[key]) != len(self.history['epoch']):
                 raise ValueError(
@@ -269,11 +285,14 @@ class Trainer:
             raise ValueError(
                 f"Length of true_labels ({len(self.history['true_labels'])}) does not match length of predictions ({len(self.history['predictions'])}).")
 
-        self.history['model_name'] = [self.model_name] * len(self.history['epoch'])
+        self.history['model_name'] = [
+            self.model_name] * len(self.history['epoch'])
 
         history_df = pd.DataFrame(self.history)
-        history_df['true_labels'] = history_df['true_labels'].apply(lambda x: ','.join(map(str, x)))
-        history_df['predictions'] = history_df['predictions'].apply(lambda x: ','.join(map(str, x)))
+        history_df['true_labels'] = history_df['true_labels'].apply(
+            lambda x: ','.join(map(str, x)))
+        history_df['predictions'] = history_df['predictions'].apply(
+            lambda x: ','.join(map(str, x)))
 
         if not os.path.isfile(filename):
             history_df.to_csv(filename, index=False)

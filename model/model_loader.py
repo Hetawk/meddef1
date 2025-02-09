@@ -27,8 +27,8 @@ class ModelLoader:
             'vgg': {'func': get_vgg, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'msarnet': {'func': MSARNet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'cbam_resnet': {'func': get_resnet_with_cbam, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
-            'meddef1': {'func': get_meddef1, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
-            'meddef2': {'func': get_meddef2, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']}
+            'meddef1_': {'func': get_meddef1, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
+            'meddef2_': {'func': get_meddef2, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']}
         }
         logging.info("ModelLoader initialized with models: " + ", ".join(self.models_dict.keys()))
 

@@ -1,102 +1,152 @@
 data:
   data_dir: "./dataset"
-  datasets:
-    - name: scisic_train
+  data_key:
+    - name: scisic
       modality: dermoscopy
       train_dir: "scisic/Train"
       test_dir: "scisic/Test"
-      preprocessing:
-        normalize: {method: "minmax", target_range: [0, 1]}
-        artifact_removal: {method: "median_filter", kernel_size: 3}
-        contrast_enhancement: {method: "CLAHE", clip_limit: 2.0, tile_grid_size: [8, 8]}
-        resize: [224, 224]
-    - name: ccts_train
+      normalization:
+        mean: [0.7437659, 0.58653116, 0.58686644]
+        std: [0.08040085, 0.10757149, 0.12017569]
+      augmentation:
+        contrast_enhancement: true
+      class_balancing: weighted_loss
+      duplicate_removal: true
+      structure:
+        train: "Train"
+        test: "Test"
+      training:
+        epochs: 5
+        batch_size: 32
+        lr: 0.001
+        momentum: 0.9
+        weight_decay: 1e-4
+
+    - name: ccts
       modality: ct
       train_dir: "ccts/train"
       test_dir: "ccts/test"
-      preprocessing:
-        windowing: {method: "hu_window", window: [-1000, 400]}
-        normalize: {method: "zscore"}
-        artifact_removal: {method: "gaussian_filter", sigma: 1.0}
-        resize: [256, 256]
-    - name: rotc_train
+      normalization:
+        mean: [0.323004, 0.32297248, 0.32300267]
+        std: [0.22162104, 0.22161943, 0.2216194]
+      conversion: convert_to_3_channel
+      duplicate_removal: true
+      structure:
+        train: "train"
+        valid: "valid"
+        test: "test"
+      training:
+        epochs: 100
+        batch_size: 8
+        lr: 0.001
+        momentum: 0.9
+        weight_decay: 1e-4
+
+    - name: rotc
       modality: oct
       train_dir: "rotc/train"
       test_dir: "rotc/test"
-      preprocessing:
-        normalize: {method: "minmax", target_range: [0, 1]}
-        contrast_enhancement: {method: "histogram_equalization"}
-        resize: [224, 224]
+      normalization:
+        mean: [0.19338988, 0.19338988, 0.19338988]
+        std: [0.1933612, 0.1933612, 0.1933612]
+      conversion: none
+      duplicate_removal: true
+      structure:
+        train: "train"
+        val: "val"
+        test: "test"
+      training:
+        epochs: 30
+        batch_size: 64
+        lr: 0.001
+        momentum: 0.9
+        weight_decay: 1e-4
 
-training:
-  epochs: 30
-  batch_size: 64
-  lr: 0.01
-  momentum: 0.9
-  weight_decay: 1e-4
+    - name: kvasir
+      modality: endoscopy
+      train_dir: "kvasir/train"
+      normalization:
+        mean: [0.48510954, 0.34737176, 0.30044696]
+        std: [0.29461348, 0.22394758, 0.19942161]
+      duplicate_removal: true
+      structure:
+        train: "train"
+      training:
+        epochs: 30
+        batch_size: 64
+        lr: 0.001
+        momentum: 0.9
+        weight_decay: 1e-4
 
-datasets:
-  scisic_train:
-    resize: true
-    target_size: [512, 512]
-    padding: true
-    normalization:
-      mean: [0.7437659, 0.58653116, 0.58686644]
-      std: [0.08040085, 0.10757149, 0.12017569]
-    augmentation:
-      contrast_enhancement: true
-    class_balancing: weighted_loss
-    duplicate_removal: true
-  ccts_train:
-    resize: true
-    target_size: [512, 512]
-    padding: false
-    conversion: convert_to_3_channel
-    normalization:
-      mean: [0.323004, 0.32297248, 0.32300267]
-      std: [0.22162104, 0.22161943, 0.2216194]
-    duplicate_removal: true
-  rotc_train:
-    resize: true
-    target_size: [512, 512]
-    padding: true
-    conversion: convert_to_3_channel
-    normalization:
-      mean: [0.19338988, 0.19338988, 0.19338988]
-      std: [0.1933612, 0.1933612, 0.1933612]
-    duplicate_removal: true
-    enhancement:
-      brightness: enhance
-  kvasir_train:
-    resize: true
-    target_size: [512, 512]
-    padding: true
-    normalization:
-      mean: [0.48510954, 0.34737176, 0.30044696]
-      std: [0.29461348, 0.22394758, 0.19942161]
-    duplicate_removal: true
-  chest_xray_train:
-    resize: true
-    target_size: [512, 512]
-    padding: true
-    conversion: convert_to_3_channel
-    normalization:
-      mean: [0.48230693, 0.48230693, 0.48230693]
-      std: [0.22157896, 0.22157896, 0.22157896]
-    duplicate_removal: true
-  tbcr_train:
-    resize: false
-    conversion: convert_to_3_channel
-    normalization:
-      mean: [0.5013298, 0.5097307, 0.5125384]
-      std: [0.23488876, 0.23702013, 0.2381724]
-    duplicate_removal: true
-  miccai_brats2020_train:
-    resize: true
-    target_size: [240, 240]
-    padding: true
-    conversion: none
-    normalization:
-      mean: [0.5, 0.5, 0.5]
-      std: [0.25, 0.25, 0.25]
-    duplicate_removal: true
+    - name: dermnet
+      modality: dermoscopy
+      train_dir: "dermnet/train"
+      test_dir: "dermnet/test"
+      normalization:
+        mean: [0.485, 0.456, 0.406]
+        std: [0.229, 0.224, 0.225]
+      duplicate_removal: true
+      structure:
+        train: "train"
+        test: "test"
+      training:
+        epochs: 30
+        batch_size: 64
+        lr: 0.001
+        momentum: 0.9
+        weight_decay: 1e-4
+
+    - name: chest_xray
+      modality: xray
+      train_dir: "chest_xray/train"
+      test_dir: "chest_xray/test"
+      normalization:
+        mean: [0.48230693, 0.48230693, 0.48230693]
+        std: [0.22157896, 0.22157896, 0.22157896]
+      conversion: convert_to_3_channel
+      duplicate_removal: true
+      structure:
+        train: "train"
+        val: "val"
+        test: "test"
+      training:
+        epochs: 30
+        batch_size: 64
+        lr: 0.001
+        momentum: 0.9
+        weight_decay: 1e-4
+
+    - name: tbcr
+      modality: ct
+      train_dir: "tbcr/Normal"
+      normalization:
+        mean: [0.5013298, 0.5097307, 0.5125384]
+        std: [0.23488876, 0.23702013, 0.2381724]
+      conversion: convert_to_3_channel
+      duplicate_removal: true
+      structure:
+        primary: "Normal"
+        alternative: "Tuberculosis"
+      training:
+        epochs: 30
+        batch_size: 64
+        lr: 0.001
+        momentum: 0.9
+        weight_decay: 1e-4
+
+    - name: miccai_brats2020
+      modality: mri
+      train_dir: "miccai_brats2020/MICCAI_BraTS2020_TrainingData"
+      normalization:
+        mean: [0.5, 0.5, 0.5]
+        std: [0.25, 0.25, 0.25]
+      conversion: none
+      duplicate_removal: true
+      structure:
+        train: "MICCAI_BraTS2020_TrainingData"
+      training:
+        epochs: 30
+        batch_size: 64
+        lr: 0.001
+        momentum: 0.9
+        weight_decay: 1e-4

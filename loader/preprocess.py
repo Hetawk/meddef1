@@ -426,10 +426,10 @@
 #         Args:
 #             dataset (torch.utils.data.Dataset): The dataset to calculate statistics for.
 #         """
-#         data_list = []
+#         data_key = []
 #         for data, _ in dataset:
-#             data_list.append(data.numpy())
-#         data_array = np.array(data_list)
+#             data_key.append(data.numpy())
+#         data_array = np.array(data_key)
 #         mean = np.mean(data_array, axis=0)
 #         median = np.median(data_array, axis=0)
 #         std_dev = np.std(data_array, axis=0)

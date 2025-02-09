@@ -50,12 +50,18 @@ python main.py --data chest_xray --task_name normal_training --epochs 100 --trai
 - `utils/`: Contains utility functions for logging, optimization, and task handling
 - `arg_parser.py`: Argument parser for command line arguments
 
-## Example
+## Running chect_xray
 
 Here is an example command to run the project with the `chest_xray` dataset and `resnet` architecture:
 
 ```bash
 python main.py --data chest_xray --task_name normal_training --epochs 100 --train-batch 32 --test-batch 32 --lr 0.001 --drop 0.5 --gpu-ids 2 --arch resnet --depth '{"resnet": [18, 34]}' --pin_memory
+```
+
+## When running with config.yaml configuration overriding arg_parser
+
+```bash
+python main.py --data ccts --data_key ccts --task_name normal_training --epochs 2 --train-batch 8 --test-batch 8 --lr 0.001 --drop 0.5 --gpu-ids 0 --arch [resnet, meddef1_] --depth "{'resnet': [18,34], 'meddef1_': [1.0,1.1]}"
 ```
 
 ## Contributing
