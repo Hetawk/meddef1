@@ -1,5 +1,31 @@
 data:
   data_dir: "./dataset"
+  processed_dir: "./processed_data"
+  common_settings:
+    resize: [224, 224] # Standard size for all datasets
+    channels: 3 # Enforce RGB
+    pad_to_square: true
+    normalize: true
+    normalization:
+      mean: [0.485, 0.456, 0.406] # ImageNet stats as default
+      std: [0.229, 0.224, 0.225]
+
+  dataset_structure:
+    standard: # datasets with train/val/test
+      - chest_xray
+      - rotc
+    train_test: # datasets with only train/test
+      - dermnet
+      - scisic
+    train_valid_test: # datasets with train/valid/test
+      - ccts
+    class_based: # datasets with class folders
+      - tbcr
+    metadata_format:
+      tbcr:
+        - "Normal.metadata.xlsx"
+        - "Tuberculosis.metadata.xlsx"
+
   data_key:
     - name: scisic
       modality: dermoscopy
@@ -10,17 +36,23 @@ data:
         std: [0.08040085, 0.10757149, 0.12017569]
       augmentation:
         contrast_enhancement: true
-      class_balancing: weighted_loss
+        brightness_adjustment: false # Brightness is good
+      class_balancing: weighted_loss # Added due to severe class imbalance (ratio: 6.00)
       duplicate_removal: true
       structure:
+        type: "train_test"
         train: "Train"
         test: "Test"
+        split_ratios: [0.85, 0.15] # train/val from train set
       training:
         epochs: 5
         batch_size: 32
         lr: 0.001
         momentum: 0.9
         weight_decay: 1e-4
+      padding:
+        enabled: true
+        strategy: "symmetric" # For handling varying dimensions
 
     - name: ccts
       modality: ct
@@ -29,18 +61,24 @@ data:
       normalization:
         mean: [0.323004, 0.32297248, 0.32300267]
         std: [0.22162104, 0.22161943, 0.2216194]
-      conversion: convert_to_3_channel
+      conversion: convert_to_3_channel # Important - handles multiple channel types
       duplicate_removal: true
       structure:
         train: "train"
         valid: "valid"
         test: "test"
       training:
-        epochs: 100
-        batch_size: 8
+        epochs: 2
+        batch_size: 32
         lr: 0.001
+        optimizer: adam # Change to adam
         momentum: 0.9
         weight_decay: 1e-4
+      augmentation:
+        contrast_enhancement: false # Contrast levels are acceptable
+      padding:
+        enabled: true
+        strategy: "symmetric"
 
     - name: rotc
       modality: oct
@@ -49,18 +87,26 @@ data:
       normalization:
         mean: [0.19338988, 0.19338988, 0.19338988]
         std: [0.1933612, 0.1933612, 0.1933612]
-      conversion: none
+      conversion: convert_to_3_channel # Change to handle grayscale images
       duplicate_removal: true
       structure:
         train: "train"
         val: "val"
         test: "test"
       training:
-        epochs: 30
+        epochs: 100
         batch_size: 64
         lr: 0.001
         momentum: 0.9
         weight_decay: 1e-4
+      augmentation:
+        brightness_adjustment: true # Added due to low brightness
+      preprocessing:
+        clahe: true # For contrast enhancement
+      padding:
+        enabled: true
+        mode: "constant"
+        value: 0
 
     - name: kvasir
       modality: endoscopy
@@ -77,6 +123,11 @@ data:
         lr: 0.001
         momentum: 0.9
         weight_decay: 1e-4
+      padding:
+        enabled: true
+        strategy: "symmetric" # For handling varying dimensions
+      augmentation:
+        contrast_enhancement: false # Contrast is acceptable
 
     - name: dermnet
       modality: dermoscopy
@@ -103,7 +154,7 @@ data:
       normalization:
         mean: [0.48230693, 0.48230693, 0.48230693]
         std: [0.22157896, 0.22157896, 0.22157896]
-      conversion: convert_to_3_channel
+      conversion: convert_to_3_channel # Handle both grayscale and RGB
       duplicate_removal: true
       structure:
         train: "train"
@@ -115,18 +166,29 @@ data:
         lr: 0.001
         momentum: 0.9
         weight_decay: 1e-4
+      padding:
+        enabled: true
+        strategy: "symmetric" # For varying dimensions
+      preprocessing:
+        remove_noise: true # Add noise reduction
 
     - name: tbcr
       modality: ct
-      train_dir: "tbcr/Normal"
+      train_dir: "tbcr"
       normalization:
         mean: [0.5013298, 0.5097307, 0.5125384]
         std: [0.23488876, 0.23702013, 0.2381724]
       conversion: convert_to_3_channel
       duplicate_removal: true
       structure:
-        primary: "Normal"
-        alternative: "Tuberculosis"
+        type: "class_based"
+        classes:
+          - "Normal"
+          - "Tuberculosis"
+        metadata_files:
+          - "Normal.metadata.xlsx"
+          - "Tuberculosis.metadata.xlsx"
+        split_ratios: [0.7, 0.15, 0.15]
       training:
         epochs: 30
         batch_size: 64

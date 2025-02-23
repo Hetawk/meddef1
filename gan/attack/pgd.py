@@ -10,11 +10,14 @@ class PGDAttack:
         self.epsilon = epsilon
         self.alpha = alpha
         self.iterations = iterations
+        self._logged = False  # flag to log message only once
         self.device = next(model.parameters()).device
         logging.info("PGD Attack initialized.")
 
     def attack(self, images, labels):
-        logging.info("Performing PGD attack.")
+        if not self._logged:
+            logging.info("Performing PGD attack.")
+            self._logged = True
         images = images.to(self.device)
         labels = labels.to(self.device)
         loss = nn.CrossEntropyLoss()

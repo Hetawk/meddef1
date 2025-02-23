@@ -1,0 +1,51 @@
+Dataset: chest_xray
+==================================================
+
+Original Image Properties:
+  - Size: (2090, 1858)
+  - Channels: 1 (L)
+
+Target Processing Properties:
+  - Shape: (1, 224, 224)
+  - Channels: 1
+
+Split Information:
+--------------------
+
+TRAIN:
+Total images: 5216
+Classes:
+Processed Image Properties:
+  - Size: (224, 224)
+  - Channels: 1 (L)
+Class Distribution:
+  - NORMAL: 1341 images
+  - PNEUMONIA: 3875 images
+
+VAL:
+Total images: 16
+Classes:
+Processed Image Properties:
+  - Size: (224, 224)
+  - Channels: 1 (L)
+Class Distribution:
+  - NORMAL: 8 images
+  - PNEUMONIA: 8 images
+
+TEST:
+Total images: 624
+Classes:
+Processed Image Properties:
+  - Size: (224, 224)
+  - Channels: 1 (L)
+Class Distribution:
+  - NORMAL: 234 images
+  - PNEUMONIA: 390 images
+
+Total Dataset Images: 5856
+
+Preprocessing Information:
+--------------------
+Applied Preprocessing:
+  - remove_noise: True
+==================================================

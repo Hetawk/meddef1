@@ -7,7 +7,9 @@ from typing import Type, Tuple, Union, Optional
 from model.attention.base_robust_method import BaseRobustMethod
 from model.meddef.cbamsa import CBAMBottleneckBlock, CBAMBasicBlock
 from model.meddef.rcbamsa import ResNetCBAMSA
-from model.attention.base.self_attention import SelfAttention   # added import
+from model.attention.base.self_attention import SelfAttention
+from model.defense.multi_scale import DefenseModule
+
 
 class MedDefBase(nn.Module):
     """
@@ -17,64 +19,115 @@ class MedDefBase(nn.Module):
 
     def __init__(self, block: Union[Type[CBAMBasicBlock], Type[CBAMBottleneckBlock]],
                  layers: Tuple[int, int, int, int],
-                 num_classes: int, input_channels: int = 3, pretrained: bool = False,
+                 num_classes: int = 1000, input_channels: int = 3,
                  robust_method: Optional[BaseRobustMethod] = None):
         super(MedDefBase, self).__init__()
 
         # Initialize ResNetCBAMSA with the given block and layers
-        self.resnet_cbamsa = ResNetCBAMSA(block, layers, num_classes=num_classes, input_channels=input_channels)
+        self.resnet_cbamsa = ResNetCBAMSA(
+            block, layers, num_classes=num_classes, input_channels=input_channels)
 
-        # Remove the final fully connected layer because we will use the feature output
-        self.resnet_cbamsa.fc = nn.Identity()
+        # Add defense module
+        channels = 512 * block.expansion
+        self.defense = DefenseModule(channels)
 
-        # Final fully connected layer: input features dimension remains 512 * block.expansion
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
+        # Fix self-attention dimensions
+        self.self_attention = SelfAttention(
+            in_dim=channels,  # Input dimension
+            key_dim=channels,  # Keep full dimension for key
+            query_dim=channels,  # Keep full dimension for query
+            value_dim=channels  # Keep full dimension for value
+        )
 
-        # Define an external SelfAttention layer from the shared module
-        self.self_attention = SelfAttention(512 * block.expansion,
-                                            512 * block.expansion,
-                                            512 * block.expansion)
+        # Feature fusion layer
+        self.fusion = nn.Sequential(
+            nn.Conv2d(channels * 2, channels, 1),
+            nn.BatchNorm2d(channels),
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(0.2)
+        )
+
+        # Add robust method
         self.robust_method = robust_method
 
+        # Final classifier
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(channels, num_classes)
+
     def forward(self, x):
-        # Extract features using ResNetCBAMSA backbone
-        features = self.resnet_cbamsa(x)    # features shape: [batch, channels, H, W]
+        # Get features from ResNet+CBAM+SA
+        features = self.resnet_cbamsa(x)
 
-        # Flatten features
-        x = features.view(features.size(0), -1)  # shape: [batch, channels_flat]
+        # Apply defense module
+        defended = self.defense(features)
 
-        # Apply self-attention: add sequence dimension and then remove it
-        x_seq = x.unsqueeze(1)    # shape: [batch, 1, channels_flat]
-        x_att, _ = self.self_attention(x_seq, x_seq, x_seq)
-        x = x_att.squeeze(1)      # back to shape: [batch, channels_flat]
+        # Process features properly
+        B, C, H, W = defended.shape
 
-        if self.robust_method:
-            x, _ = self.robust_method(x, x, x)
+        # Spatial features path
+        spatial_features = defended  # [B, C, H, W]
+
+        # Self-attention path with proper reshaping
+        flat_features = defended.flatten(2)  # [B, C, HW]
+        flat_features = flat_features.permute(0, 2, 1)  # [B, HW, C]
+
+        # Apply self-attention and handle tuple return
+        attended, _ = self.self_attention(
+            query=flat_features,
+            key=flat_features,
+            value=flat_features
+        )  # Now properly unpacking tuple
+
+        # Reshape back to spatial form
+        attended = attended.permute(0, 2, 1).view(B, C, H, W)
+
+        # Combine features
+        combined = torch.cat([spatial_features, attended], dim=1)
+        fused = self.fusion(combined)
+
+        # Apply robust method if available
+        if self.robust_method is not None:
+            fused, _ = self.robust_method(fused, fused, fused)
 
         # Final classification
-        output = self.fc(x)
-        return output
+        out = self.avgpool(fused)
+        out = torch.flatten(out, 1)
+        out = self.fc(out)
+
+        return out
 
 # Specific MedDef classes for each depth configuration remain unchanged
+
+
 class MedDef2_0(MedDefBase):
     def __init__(self, num_classes, input_channels=3, pretrained=False):
-        super(MedDef2_0, self).__init__(CBAMBasicBlock, (2, 2, 2, 2), num_classes, input_channels, pretrained)
+        super(MedDef2_0, self).__init__(CBAMBasicBlock,
+                                        (2, 2, 2, 2), num_classes, input_channels, pretrained)
+
 
 class MedDef2_1(MedDefBase):
     def __init__(self, num_classes, input_channels=3, pretrained=False):
-        super(MedDef2_1, self).__init__(CBAMBasicBlock, (3, 4, 6, 3), num_classes, input_channels, pretrained)
+        super(MedDef2_1, self).__init__(CBAMBasicBlock,
+                                        (3, 4, 6, 3), num_classes, input_channels, pretrained)
+
 
 class MedDef2_2(MedDefBase):
     def __init__(self, num_classes, input_channels=3, pretrained=False):
-        super(MedDef2_2, self).__init__(CBAMBottleneckBlock, (3, 4, 6, 3), num_classes, input_channels, pretrained)
+        super(MedDef2_2, self).__init__(CBAMBottleneckBlock,
+                                        (3, 4, 6, 3), num_classes, input_channels, pretrained)
+
 
 class MedDef2_3(MedDefBase):
     def __init__(self, num_classes, input_channels=3, pretrained=False):
-        super(MedDef2_3, self).__init__(CBAMBottleneckBlock, (3, 4, 23, 3), num_classes, input_channels, pretrained)
+        super(MedDef2_3, self).__init__(CBAMBottleneckBlock,
+                                        (3, 4, 23, 3), num_classes, input_channels, pretrained)
+
 
 class MedDef2_4(MedDefBase):
     def __init__(self, num_classes, input_channels=3, pretrained=False):
-        super(MedDef2_4, self).__init__(CBAMBottleneckBlock, (3, 8, 36, 3), num_classes, input_channels, pretrained)
+        super(MedDef2_4, self).__init__(CBAMBottleneckBlock,
+                                        (3, 8, 36, 3), num_classes, input_channels, pretrained)
+
 
 class MedDef2_5(nn.Module):
     """
@@ -95,7 +148,8 @@ class MedDef2_5(nn.Module):
         self.resnet_cbamsa2.fc = nn.Identity()
 
         # Define a new fully connected layer that combines both ResNetCBAMSA feature outputs
-        resnet_cbamsa_out_features = 512 * CBAMBottleneckBlock.expansion  # Output size of ResNetCBAMSA's features
+        # Output size of ResNetCBAMSA's features
+        resnet_cbamsa_out_features = 512 * CBAMBottleneckBlock.expansion
         combined_features = resnet_cbamsa_out_features * 2
 
         # Final fully connected layer
@@ -109,7 +163,8 @@ class MedDef2_5(nn.Module):
         resnet_cbamsa2_features = self.resnet_cbamsa2(x)
 
         # Concatenate the features from both ResNetCBAMSA models
-        combined_features = torch.cat((resnet_cbamsa1_features, resnet_cbamsa2_features), dim=1)
+        combined_features = torch.cat(
+            (resnet_cbamsa1_features, resnet_cbamsa2_features), dim=1)
 
         # Pass through the final fully connected layer
         output = self.fc(combined_features)
@@ -135,7 +190,8 @@ class MedDef2_6(nn.Module):
         self.resnet_cbamsa2.fc = nn.Identity()
 
         # Define a new fully connected layer that combines both ResNetCBAMSA feature outputs
-        resnet_cbamsa_out_features = 512 * CBAMBasicBlock.expansion  # Output size of ResNetCBAMSA's features
+        # Output size of ResNetCBAMSA's features
+        resnet_cbamsa_out_features = 512 * CBAMBasicBlock.expansion
         combined_features = resnet_cbamsa_out_features * 2
 
         # Final fully connected layer
@@ -149,7 +205,8 @@ class MedDef2_6(nn.Module):
         resnet_cbamsa2_features = self.resnet_cbamsa2(x)
 
         # Concatenate the features from both ResNetCBAMSA models
-        combined_features = torch.cat((resnet_cbamsa1_features, resnet_cbamsa2_features), dim=1)
+        combined_features = torch.cat(
+            (resnet_cbamsa1_features, resnet_cbamsa2_features), dim=1)
 
         # Pass through the final fully connected layer
         output = self.fc(combined_features)
@@ -157,7 +214,7 @@ class MedDef2_6(nn.Module):
 
 
 def get_meddef2(depth: float, input_channels: int = 3, num_classes: int = None,
-               robust_method: Optional[BaseRobustMethod] = None) -> nn.Module:
+                robust_method: Optional[BaseRobustMethod] = None) -> nn.Module:
     depth_to_block_layers = {
         2.0: (CBAMBasicBlock, (2, 2, 2, 2)),  # Depth 18
         2.1: (CBAMBasicBlock, (3, 4, 6, 3)),  # Depth 34

@@ -1,4 +1,4 @@
-from .densenet_model import *  # Import your DenseNet121 model
+from model.backbone.densenet import *  # Import your DenseNet121 model
 
 
 class MedDef(nn.Module):

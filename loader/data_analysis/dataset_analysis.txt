@@ -1,0 +1,277 @@
+
+Timestamp: 2025-02-03 13:41:05
+Dataset: scisic
+Mean: [0.7437659  0.58653116 0.58686644]
+Std: [0.08040085 0.10757149 0.12017569]
+Class Distribution: Warning: Severe class imbalance detected (ratio: 6.00). Consider oversampling, undersampling, or weighted loss functions.
+Image Dimensions: 
+Image Dimension Analysis:
+Found 76 unique sizes. First 10: [(965, 724), (962, 676), (964, 640), (957, 640), (963, 629), (959, 723), (2725, 2082), (722, 542), (960, 645), (722, 545)]
+Warning: Images have varying dimensions. Ensure resizing or padding is applied.
+
+Color Channels: 
+Color Channel Analysis:
+Unique channel counts: {3}
+All images are RGB (3-channel). No conversion needed.
+
+Corrupted Files: 
+Corrupted File Check:
+No corrupted files found.
+
+Pixel Value Range: Pixel range: [0.0, 1.0]. Pixel values are in range [0,1]. Normalization may not be needed.
+Duplicate Check: Found 139 sets of duplicate images. Consider removing duplicates.
+Hash: ba2381d69596ee6568e929fde28f8db0 -> 2 duplicates
+Hash: 8ed19d8653ada4bb450a66916ca67885 -> 2 duplicates
+Only showing 2 duplicate sets. Use full log for more details if needed.
+
+Noise/Artifacts: Average Laplacian variance (noise/sharpness measure): 106.00
+Image sharpness/noise levels appear acceptable.
+
+Brightness/Contrast: Average brightness: 161.57
+Average contrast: 25.64
+Brightness appears within acceptable range.
+Warning: Low contrast detected. Consider contrast enhancement.
+
+File Format/Metadata: File format distribution:
+  .jpg: 2239
+Metadata extraction appears consistent.
+
+Aspect Ratio: Aspect Ratio - Mean: 1.33, Min: 0.75, Max: 1.55
+Warning: Significant variation in aspect ratios. Consider standardizing cropping or padding.
+
+Data Augmentation Feasibility: Brightness range: 149.90
+Contrast range: 84.87
+Diversity in brightness/contrast appears sufficient.
+
+--------------------------------------------------
+
+Timestamp: 2025-02-03 13:41:26
+Dataset: ccts
+Mean: [0.323004   0.32297248 0.32300267]
+Std: [0.22162104 0.22161943 0.2216194 ]
+Class Distribution: Class distribution is relatively balanced. No special handling required.
+Image Dimensions: 
+Image Dimension Analysis:
+Found 482 unique sizes. First 10: [(434, 261), (309, 248), (396, 216), (413, 305), (425, 279), (388, 248), (437, 262), (377, 220), (847, 533), (418, 267)]
+Warning: Images have varying dimensions. Ensure resizing or padding is applied.
+
+Color Channels: 
+Color Channel Analysis:
+Unique channel counts: {1, 3, 4}
+Warning: Grayscale images detected. Consider converting to 3-channel or using 1-channel models.
+
+Corrupted Files: 
+Corrupted File Check:
+No corrupted files found.
+
+Pixel Value Range: Pixel range: [0.0, 1.0]. Pixel values are in range [0,1]. Normalization may not be needed.
+Duplicate Check: Found 59 sets of duplicate images. Consider removing duplicates.
+Hash: fdda5fa348cef0e20320effe649cc624 -> 2 duplicates
+Hash: acd405d5bb971e46887c9ebc14e2f48f -> 2 duplicates
+Only showing 2 duplicate sets. Use full log for more details if needed.
+
+Noise/Artifacts: Average Laplacian variance (noise/sharpness measure): 508.11
+Image sharpness/noise levels appear acceptable.
+
+Brightness/Contrast: Average brightness: 82.36
+Average contrast: 57.26
+Brightness appears within acceptable range.
+Contrast levels appear acceptable.
+
+File Format/Metadata: File format distribution:
+  .png: 601
+  .jpg: 12
+Metadata extraction appears consistent.
+
+Aspect Ratio: Aspect Ratio - Mean: 1.47, Min: 1.00, Max: 2.60
+Warning: Significant variation in aspect ratios. Consider standardizing cropping or padding.
+
+Data Augmentation Feasibility: Brightness range: 156.19
+Contrast range: 65.59
+Diversity in brightness/contrast appears sufficient.
+
+--------------------------------------------------
+
+Timestamp: 2025-02-03 14:13:15
+Dataset: rotc
+Mean: [0.19338988 0.19338988 0.19338988]
+Std: [0.1933612 0.1933612 0.1933612]
+Class Distribution: Class distribution is relatively balanced. No special handling required.
+Image Dimensions: 
+Image Dimension Analysis:
+Unique image sizes: [(512, 512), (512, 496), (1024, 496), (384, 496), (1536, 496), (768, 496)]
+Warning: Images have varying dimensions. Ensure resizing or padding is applied.
+
+Color Channels: 
+Color Channel Analysis:
+Unique channel counts: {1}
+Warning: Grayscale images detected. Consider converting to 3-channel or using 1-channel models.
+
+Corrupted Files: 
+Corrupted File Check:
+No corrupted files found.
+
+Pixel Value Range: Pixel range: [0.0, 1.0]. Pixel values are in range [0,1]. Normalization may not be needed.
+Duplicate Check: Found 6307 sets of duplicate images. Consider removing duplicates.
+Hash: 32b9d80ae8ea72f9cea78e52fc5994d9 -> 3 duplicates
+Hash: 527b3d66e474dddf9eed99cc971c82a7 -> 3 duplicates
+Only showing 2 duplicate sets. Use full log for more details if needed.
+
+Noise/Artifacts: Average Laplacian variance (noise/sharpness measure): 1393.18
+Image sharpness/noise levels appear acceptable.
+
+Brightness/Contrast: Average brightness: 49.33
+Average contrast: 51.32
+Warning: Overall brightness is low. Consider image enhancement.
+Contrast levels appear acceptable.
+
+File Format/Metadata: File format distribution:
+  .jpeg: 83484
+Metadata extraction appears consistent.
+
+Aspect Ratio: Aspect Ratio - Mean: 1.37, Min: 0.77, Max: 3.10
+Warning: Significant variation in aspect ratios. Consider standardizing cropping or padding.
+
+Data Augmentation Feasibility: Brightness range: 182.85
+Contrast range: 100.32
+Diversity in brightness/contrast appears sufficient.
+
+--------------------------------------------------
+
+Timestamp: 2025-02-03 14:18:04
+Dataset: kvasir
+Mean: [0.48510954 0.34737176 0.30044696]
+Std: [0.29461348 0.22394758 0.19942161]
+Class Distribution: Class distribution is relatively balanced. No special handling required.
+Image Dimensions: 
+Image Dimension Analysis:
+Unique image sizes: [(1350, 1080), (1280, 1024), (720, 576), (1920, 1072)]
+Warning: Images have varying dimensions. Ensure resizing or padding is applied.
+
+Color Channels: 
+Color Channel Analysis:
+Unique channel counts: {3}
+All images are RGB (3-channel). No conversion needed.
+
+Corrupted Files: 
+Corrupted File Check:
+No corrupted files found.
+
+Pixel Value Range: Pixel range: [0.0, 1.0]. Pixel values are in range [0,1]. Normalization may not be needed.
+Duplicate Check: Found 4 sets of duplicate images. Consider removing duplicates.
+Hash: 8f700a9050143c0506f087eaf8e918b9 -> 2 duplicates
+Hash: 082c669ae89556643359d30e597f4aee -> 2 duplicates
+Only showing 2 duplicate sets. Use full log for more details if needed.
+
+Noise/Artifacts: Average Laplacian variance (noise/sharpness measure): 307.73
+Image sharpness/noise levels appear acceptable.
+
+Brightness/Contrast: Average brightness: 97.72
+Average contrast: 60.16
+Brightness appears within acceptable range.
+Contrast levels appear acceptable.
+
+File Format/Metadata: File format distribution:
+  .jpg: 4000
+Metadata extraction appears consistent.
+
+Aspect Ratio: Aspect Ratio - Mean: 1.29, Min: 1.25, Max: 1.79
+Warning: Significant variation in aspect ratios. Consider standardizing cropping or padding.
+
+Data Augmentation Feasibility: Brightness range: 154.10
+Contrast range: 76.75
+Diversity in brightness/contrast appears sufficient.
+
+--------------------------------------------------
+
+Timestamp: 2025-02-03 14:25:08
+Dataset: chest_xray
+Mean: [0.48230693 0.48230693 0.48230693]
+Std: [0.22157896 0.22157896 0.22157896]
+Class Distribution: Class distribution is relatively balanced. No special handling required.
+Image Dimensions: 
+Image Dimension Analysis:
+Found 4366 unique sizes. First 10: [(976, 544), (1994, 1839), (848, 624), (1416, 816), (1454, 1071), (1488, 984), (880, 576), (1532, 1256), (1794, 1176), (1496, 1333)]
+Warning: Images have varying dimensions. Ensure resizing or padding is applied.
+
+Color Channels: 
+Color Channel Analysis:
+Unique channel counts: {1, 3}
+Warning: Grayscale images detected. Consider converting to 3-channel or using 1-channel models.
+
+Corrupted Files: 
+Corrupted File Check:
+No corrupted files found.
+
+Pixel Value Range: Pixel range: [0.0, 1.0]. Pixel values are in range [0,1]. Normalization may not be needed.
+Duplicate Check: Found 24 sets of duplicate images. Consider removing duplicates.
+Hash: dcc3ab0eaf19ff80af9d3d254b340da5 -> 2 duplicates
+Hash: edbf5c2810fce5b00722716ab730e577 -> 2 duplicates
+Only showing 2 duplicate sets. Use full log for more details if needed.
+
+Noise/Artifacts: Average Laplacian variance (noise/sharpness measure): 144.01
+Image sharpness/noise levels appear acceptable.
+
+Brightness/Contrast: Average brightness: 122.99
+Average contrast: 56.91
+Brightness appears within acceptable range.
+Contrast levels appear acceptable.
+
+File Format/Metadata: File format distribution:
+  .jpeg: 5216
+Metadata extraction appears consistent.
+
+Aspect Ratio: Aspect Ratio - Mean: 1.44, Min: 0.84, Max: 3.38
+Warning: Significant variation in aspect ratios. Consider standardizing cropping or padding.
+
+Data Augmentation Feasibility: Brightness range: 160.85
+Contrast range: 67.07
+Diversity in brightness/contrast appears sufficient.
+
+--------------------------------------------------
+
+Timestamp: 2025-02-03 14:29:00
+Dataset: tbcr
+Mean: [0.5013298 0.5097307 0.5125384]
+Std: [0.23488876 0.23702013 0.2381724 ]
+Class Distribution: Class distribution is relatively balanced. No special handling required.
+Image Dimensions: 
+Image Dimension Analysis:
+Unique image sizes: [(512, 512)]
+All images have consistent dimensions. No resizing needed.
+
+Color Channels: 
+Color Channel Analysis:
+Unique channel counts: {1, 3}
+Warning: Grayscale images detected. Consider converting to 3-channel or using 1-channel models.
+
+Corrupted Files: 
+Corrupted File Check:
+No corrupted files found.
+
+Pixel Value Range: Pixel range: [0.0, 1.0]. Pixel values are in range [0,1]. Normalization may not be needed.
+Duplicate Check: Found 3 sets of duplicate images. Consider removing duplicates.
+Hash: ab7b3732a223c780a3af4307583878c8 -> 2 duplicates
+Hash: 13ad2e91b8a719fa6ce0e87a4ea0b8b1 -> 2 duplicates
+Only showing 2 duplicate sets. Use full log for more details if needed.
+
+Noise/Artifacts: Average Laplacian variance (noise/sharpness measure): 109.52
+Image sharpness/noise levels appear acceptable.
+
+Brightness/Contrast: Average brightness: 129.39
+Average contrast: 60.55
+Brightness appears within acceptable range.
+Contrast levels appear acceptable.
+
+File Format/Metadata: File format distribution:
+  .png: 4200
+Metadata extraction appears consistent.
+
+Aspect Ratio: Aspect Ratio - Mean: 1.00, Min: 1.00, Max: 1.00
+Aspect ratios appear consistent.
+
+Data Augmentation Feasibility: Brightness range: 191.40
+Contrast range: 81.80
+Diversity in brightness/contrast appears sufficient.
+
+--------------------------------------------------

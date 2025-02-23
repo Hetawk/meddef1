@@ -11,27 +11,18 @@ class Regularization:
     """
 
     @staticmethod
-    def apply_l2_regularization(model, lambda_l2, log_message=True):
-        """
-        Applies L2 regularization to the given model.
+    def apply_l2_regularization(model, lambda_l2, log_message=False):
+        """Calculate L2 regularization loss"""
+        l2_loss = 0.0
+        for param in model.parameters():
+            l2_loss += torch.norm(param, p=2)
+        l2_loss = lambda_l2 * l2_loss
 
-        Args:
-            model (nn.Module): The model to apply L2 regularization to.
-            lambda_l2 (float): The regularization strength.
-
-        Returns:
-            torch.Tensor: The L2 regularization term to be added to the loss.
-            :param model:
-            :param lambda_l2:
-            :param log_message:
-        """
         if log_message:
-            print("\n")
             logging.info(
                 f"Applying L2 regularization with strength: {lambda_l2}")
-        l2_norm = sum(p.pow(2.0).sum() for p in model.parameters())
-        # Ensure lambda_l2 is consistent with your configuration (e.g. 0.001)
-        return lambda_l2 * l2_norm
+
+        return l2_loss
 
     @staticmethod
     def apply_dropout(model, dropout_rate):
@@ -51,17 +42,8 @@ class Regularization:
                 module.p = dropout_rate
 
     @staticmethod
-    def integrate_regularization(loss, l2_reg, log_message=True):
-        """
-        Integrates L2 regularization term into the loss.
-
-        Args:
-            loss (torch.Tensor): The original loss.
-            l2_reg (torch.Tensor): The L2 regularization term.
-
-        Returns:
-            torch.Tensor: The combined loss with L2 regularization.
-        """
+    def integrate_regularization(loss, l2_reg, log_message=False):
+        """Add regularization to the loss"""
         if log_message:
-            logging.info(f"Integrating L2 regularization into the loss.")
+            logging.info("Integrating L2 regularization into the loss.")
         return loss + l2_reg

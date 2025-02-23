@@ -1,308 +1,224 @@
 import logging
 import os
-from datetime import datetime
+import gc
+from tqdm import tqdm
 
-import numpy as np
 import torch
+from torchvision.utils import save_image
 
-from gan.attack.attacker import AttackHandler
-from gan.defense.defense_loader import DefenseLoader
-from gan.defense.prune import Pruner
+# from gan.defense.defense_loader import DefenseLoader
 from loader.dataset_loader import DatasetLoader
-from train import Trainer
-from utils.ensemble import Ensemble
-from utils.evaluator import Evaluator
-from utils.visual.visualization import Visualization
+from model.model_loader import ModelLoader
+from train import TrainingManager
+
 
 class TaskHandler:
-    def __init__(self, datasets_dict, models_loader, optimizers_dict, hyperparams_dict, input_channels_dict, classes,
-                 dataset_name, lr_scheduler_loader, cross_validator, device, args, num_classes):
-        self.classes = classes  # Ensure this is a dictionary
-        self.dataset_name = dataset_name
-        self.datasets_dict = datasets_dict
-        self.current_task = None
-        self.models_loader = models_loader
-        self.optimizers_dict = optimizers_dict
-        self.lr_scheduler_loader = lr_scheduler_loader
-        self.cross_validator = cross_validator
-        self.hyperparams_dict = hyperparams_dict
-        self.input_channels_dict = input_channels_dict
-        self.visualization = Visualization()
-        self.attack_loader = None
-        self.defense_loader = None
-        self.criterion = torch.nn.CrossEntropyLoss()
+    def __init__(self, args):
         self.args = args
-        self.device = args.device
-        self.trained_models = {}
-        self.num_classes = num_classes
-
-    def run_train(self, loaded_model=None, loaded_model_name_with_depth=None):
-        """Runs the training process for the specified dataset and models."""
-        self.current_task = 'normal_training'
-        logging.info("Training task selected.")
-        all_results = []
-
-        dataset_name = self.dataset_name
-        if dataset_name not in self.datasets_dict:
-            raise ValueError(f"Dataset {dataset_name} not found in datasets_dict.")
-
-        dataset_loader = self.datasets_dict[dataset_name]
-        train_loader, val_loader, test_loader = dataset_loader.load(
-            train_batch_size=self.args.train_batch,
-            val_batch_size=self.args.test_batch,
-            test_batch_size=self.args.test_batch,
-            num_workers=self.args.workers,
-            pin_memory=self.args.pin_memory
-        )
-        logging.info(f"Processing dataset: {dataset_name}")
-        input_channels = self.input_channels_dict.get(dataset_name)
-        logging.info(f"Input channels for {dataset_name}: {input_channels}")
-
-        model_list = []
-        model_names_list = []
-        true_labels_dict = {}
-        predictions_dict = {}
-
-        for model_name in self.args.arch:  # Iterate over the list of architectures
-            if isinstance(self.args.depth, dict):
-                depths = self.args.depth.get(model_name, [])
-                if not depths:
-                    logging.warning(f"No depths specified for model {model_name}. Using default depth.")
-                    depths = [None]  # or handle accordingly
-            else:
-                depths = self.args.depth if isinstance(self.args.depth, list) else [self.args.depth]
-
-            models = self.train_and_evaluate_model(
-                model_name, dataset_name, train_loader, val_loader, test_loader, input_channels,
-                depths,  # Pass depths directly
-                self.num_classes, self.classes[dataset_name],
-                loaded_model=loaded_model, loaded_model_name_with_depth=loaded_model_name_with_depth
-            )
-
-            for depth, (model, trainer) in models.items():
-                model_name_with_depth = f"{model_name}{depth}"
-                model_list.append(model)
-                model_names_list.append(model_name_with_depth)
-                true_labels, predictions = trainer.get_test_results()
-
-                # Ensure predictions have the correct shape
-                predictions = np.array(predictions)
-                if predictions.ndim == 1:
-                    predictions = predictions.reshape(-1, 1)
-                if predictions.shape[1] != self.num_classes:
-                    raise ValueError(
-                        f'Predictions array shape {predictions.shape} is not correct, expected (number of samples, {self.num_classes})')
-
-                true_labels_dict[model_name_with_depth] = true_labels.tolist()
-                predictions_dict[model_name_with_depth] = predictions.tolist()
-
-                evaluator = Evaluator(model_name_with_depth, [], true_labels.tolist(), predictions.tolist(),
-                                      self.current_task)
-                try:
-                    evaluator.evaluate(dataset_name)
-                    all_results.append(evaluator)
-                except Exception as e:
-                    logging.error(f"Error evaluating model {model_name_with_depth}: {e}")
-
-                # Generate and visualize adversarial examples
-                attack_handler = AttackHandler(model, 'fgsm', self.args)
-                results = attack_handler.generate_adversarial_samples(test_loader)
-                original_data = torch.cat([data for data, _ in test_loader], dim=0)
-                adversarial_examples = torch.cat(results['adversarial'], dim=0)
-                self.visualization.visualize_attack(
-                    original_data, adversarial_examples, None, model_name_with_depth, self.current_task,
-                    dataset_name, 'fgsm'
-                )
-                logging.info(f"Adversarial examples visualized and saved for model {model_name_with_depth}")
-
-
-        logging.info(f"Taskhandler: - Class names: {self.classes[dataset_name]}")
-        self.visualization.visualize_normal(
-            model_names_list, (true_labels_dict, predictions_dict), self.current_task, dataset_name,
-            self.classes[dataset_name]
+        self.training_manager = TrainingManager(args)
+        # Add dataset_loader initialization
+        self.dataset_loader = DatasetLoader()
+        self.model_loader = ModelLoader(
+            args.device, args.arch,
+            getattr(args, 'pretrained', True),
+            getattr(args, 'fp16', False)
         )
 
-
-    def run_defense(self):
-        self.current_task = 'defense'
-        logging.info("Defense task selected.")
-        all_results = []
-
-        dataset_name = self.dataset_name
-        if dataset_name not in self.datasets_dict:
-            raise ValueError(f"Dataset {dataset_name} not found in datasets_dict.")
-
-        dataset_loader = self.datasets_dict[dataset_name]
-        train_loader, val_loader, test_loader = dataset_loader.load(
-            train_batch_size=self.args.train_batch,
-            val_batch_size=self.args.test_batch,
-            test_batch_size=self.args.test_batch,
-            num_workers=self.args.workers,
-            pin_memory=self.args.pin_memory
-        )
-        logging.info(f"Processing dataset: {dataset_name}")
-        input_channels = self.input_channels_dict.get(dataset_name)
-        logging.info(f"Input channels for {dataset_name}: {input_channels}")
-
-        for model_name in self.args.arch:
-            if isinstance(self.args.depth, dict):
-                depths = self.args.depth.get(model_name, [])
-                if not depths:
-                    logging.warning(f"No depths specified for model {model_name}. Using default depth.")
-                    depths = [None]
-            elif isinstance(self.args.depth, list):
-                depths = self.args.depth
-            else:
-                depths = [self.args.depth]
-
-            for depth in depths:
-                if isinstance(depth, dict):
-                    raise ValueError(f"Depth for model {model_name} should be an integer, not a dictionary.")
-                model, model_name_with_depth = self.models_loader.get_model(
-                    model_name, depth=depth, input_channels=input_channels, num_classes=self.num_classes
-                )
-                model.to(self.device)
-
-                pruner = Pruner(model, self.args.prune_rate)
-                pruned_model = pruner.unstructured_prune()
-
-                # Save the pruned model using the proper path convention
-                timestamp = datetime.now().strftime("%Y%m%d")
-                filename = f"best_{model_name_with_depth}_{dataset_name}_pruned_{timestamp}.pth.tar"
-                path = os.path.join('out', self.current_task, dataset_name, model_name_with_depth, filename)
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                pruner.save_checkpoint({'state_dict': pruned_model.state_dict()}, path)
-
-                logging.info(f"Pruned model {model_name_with_depth} saved successfully to {path}.")
+    def run_train(self):
+       # "task_name normal_training"
+        """Handle normal training workflow"""
+        logging.info("Starting normal training task")
+        for dataset_name in self.args.data:
+            self.training_manager.train_dataset(dataset_name)
 
     def run_attack(self):
-        self.current_task = 'attack'
-        logging.info("Attack task selected.")
+        """Generate adversarial examples for a dataset"""
+        logging.info("Starting attack generation task")
 
-        dataset_name = self.dataset_name
-        if dataset_name not in self.datasets_dict:
-            raise ValueError(f"Dataset {dataset_name} not found in datasets_dict.")
+        dataset_name = self.args.data[0]
+        base_model_name = self.args.arch[0]  # e.g., meddef1_
 
-        dataset_loader = self.datasets_dict[dataset_name]
-        _, _, test_loader = dataset_loader.load(
-            train_batch_size=self.args.train_batch,
-            val_batch_size=self.args.test_batch,
-            test_batch_size=self.args.test_batch,
-            num_workers=self.args.workers,
+        # Get depth from args.depth dictionary
+        depth_dict = self.args.depth
+        if not isinstance(depth_dict, dict):
+            logging.error("Depth argument must be a dictionary")
+            return
+
+        # Get depths for the specified model
+        depths = depth_dict.get(base_model_name, [])
+        if not depths:
+            logging.error(f"No depths specified for model {base_model_name}")
+            return
+
+        # Use first depth value since we're processing one model at a time
+        depth = depths[0]
+
+        # Format the full model name by combining arch and depth
+        full_model_name = f"{base_model_name}_{depth}"
+        logging.info(f"Processing model: {full_model_name}")
+
+        # Load data for all splits at once
+        train_loader, val_loader, test_loader = self.dataset_loader.load_data(
+            dataset_name=dataset_name,
+            batch_size={
+                'train': self.args.train_batch,
+                'val': self.args.train_batch,
+                'test': self.args.train_batch
+            },
+            num_workers=self.args.num_workers,
             pin_memory=self.args.pin_memory
         )
-        logging.info(f"Loaded dataset for attack: {dataset_name}")
 
-        for model_name in self.args.arch:
-            depths = self.args.depth.get(model_name, []) if isinstance(self.args.depth, dict) else [self.args.depth]
+        num_classes = len(train_loader.dataset.classes)
 
-            for depth in depths:
-                model_info = self.models_loader.get_model(
-                    model_name, depth=depth, input_channels=self.input_channels_dict.get(dataset_name),
-                    num_classes=self.num_classes
-                )
+        # Initialize model using base_model_name and depth
+        models_and_names = self.model_loader.get_model(
+            model_name=base_model_name,  # Use base_model_name here
+            depth=depth,                 # Use single depth value
+            input_channels=3,
+            num_classes=num_classes,
+            task_name=self.args.task_name,
+            dataset_name=dataset_name
+        )
 
-                if isinstance(model_info, dict):
-                    for depth, (model, model_name_with_depth) in model_info.items():
-                        model.to(self.device)
-                        self._run_attack_for_model(model, model_name_with_depth, test_loader, dataset_name)
-                else:
-                    model, model_name_with_depth = model_info
-                    model.to(self.device)
-                    self._run_attack_for_model(model, model_name_with_depth, test_loader, dataset_name)
+        if not models_and_names:
+            logging.error("No models returned from model loader")
+            return
 
-    def _run_attack_for_model(self, model, model_name_with_depth, test_loader, dataset_name):
-        attack_handler = AttackHandler(
+        model, _ = models_and_names[0]  # Ignore returned model name
+        model = model.to(self.args.device)
+        model.eval()
+
+        # Initialize attack components once
+        from gan.defense.adv_train import AdversarialTraining
+        attack_trainer = AdversarialTraining(
             model=model,
-            attack_name=self.args.attack_name,  # e.g., 'fgsm' or 'pgd'
-            args=self.args  # Pass the args to the AttackHandler
+            criterion=torch.nn.CrossEntropyLoss(),
+            config=self.args
         )
 
-        results = attack_handler.generate_adversarial_samples(test_loader)
+        attack_type = getattr(self.args, 'attack_type', 'fgsm')
 
-        # Save adversarial samples
-        save_path = os.path.join('out', self.current_task, dataset_name, model_name_with_depth,
-                                 'adversarial_samples.pth')
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        torch.save(results, save_path)
-        logging.info(f"Adversarial samples saved to {save_path}")
+        # Define attack percentages for each split
+        attack_percentages = {
+            'train': getattr(self.args, 'attack_train_percentage', 0.35),
+            'val': 0.7,
+            'test': 1.0
+        }
 
-        # Visualize adversarial samples
-        self.visualization.visualize_attack(
-            results['original'], results['adversarial'], results['labels'],
-            model_name_with_depth, self.current_task, dataset_name, self.args.attack_name
-        )
-        logging.info(
-            f"Adversarial samples visualized for {model_name_with_depth} using {self.args.attack_name}")
+        # Process each split using the same model
+        data_loaders = {
+            'train': train_loader,
+            'val': val_loader,
+            'test': test_loader
+        }
 
-    def train_and_evaluate_model(self, model_name, dataset_name, train_loader, val_loader, test_loader, input_channels,
-                                 depths, num_classes, class_names, adversarial=False, loaded_model=None,
-                                 loaded_model_name_with_depth=None):
-        """Trains and evaluates models for each specified depth using DataLoader instances."""
+        for split, data_loader in data_loaders.items():
+            logging.info(f"Generating attacks for {split} split")
 
-        models = {}
+            # Calculate the maximum number of samples to attack
+            max_samples = int(len(data_loader.dataset) *
+                              attack_percentages[split])
+            total_batches = (
+                max_samples + self.args.train_batch - 1) // self.args.train_batch
 
-        for depth in depths:
-            if loaded_model and loaded_model_name_with_depth == f"{model_name}{depth}":
-                model = loaded_model
-                model_name_with_depth = loaded_model_name_with_depth
-            else:
-                try:
-                    model, model_name_with_depth = self.models_loader.get_model(
-                        model_name, depth=depth, input_channels=input_channels, num_classes=num_classes
-                    )
-                    model.to(self.device)
-                except ValueError as e:
-                    logging.error(f"Failed to load model {model_name} with depth {depth}: {e}")
-                    continue
+            # Update output directory to use full_model_name
+            output_dir = os.path.join("out", "attacks", dataset_name,
+                                      full_model_name, attack_type, split)
+            os.makedirs(output_dir, exist_ok=True)
 
-            # Calculate and print the total number of parameters in the model
-            total_params = sum(p.numel() for p in model.parameters()) / 1000000.0
-            logging.info(f'Total parameters for {model_name_with_depth}: {total_params:.2f}M')
+            try:
+                # Initialize empty lists before the loop
+                adversarial_images = []
+                labels_list = []
+                processed_samples = 0
 
-            hyperparams = self.hyperparams_dict[dataset_name]
-            optimizer = self.optimizers_dict.get_optimizer(
-                hyperparams['optimizer'], model.parameters(),
-                lr=hyperparams['lr'],
-                momentum=hyperparams.get('momentum', 0)
-            )
+                with tqdm(total=total_batches, desc=f"Generating attacks for {split}") as pbar:
+                    for batch_idx, (data, target) in enumerate(data_loader):
+                        if processed_samples >= max_samples:
+                            break
 
-            # if self.current_task in ['defense', 'attack']:
-            if self.current_task in ['normal_training']:
-                adversarial = True
+                        try:
+                            data = data.to(self.args.device)
+                            target = target.to(self.args.device)
 
-            if self.current_task is None or dataset_name is None:
-                raise ValueError("Task name or dataset name is not set.")
+                            # Generate adversarial examples
+                            _, adv_data, _ = attack_trainer.attack.attack(
+                                data, target)
 
-            trainer = Trainer(
-                model=model,
-                train_loader=train_loader,
-                val_loader=val_loader,
-                test_loader=test_loader,
-                optimizer=optimizer,
-                criterion=self.criterion,
-                model_name=model_name_with_depth,
-                task_name=self.current_task,
-                dataset_name=dataset_name,
-                device=self.device,
-                args=self.args,  # Pass args here
-                attack_loader=self.attack_loader,
-                scheduler=self.lr_scheduler_loader.get_scheduler(
-                    hyperparams['scheduler'], optimizer, **hyperparams['scheduler_params']
-                ) if self.lr_scheduler_loader else None,
-                cross_validator=self.cross_validator
-            )
+                            # Store results on CPU
+                            adversarial_images.append(adv_data.cpu())
+                            labels_list.append(target.cpu())
 
-            if adversarial:
-                # Use adversarial training
-                trainer.train(patience=hyperparams['patience'], adversarial=True)
-            else:
-                # Use normal training
-                trainer.train(patience=hyperparams['patience'])
+                            processed_samples += len(data)
 
-            trainer.test()
-            model.trained = True
+                            # Memory management
+                            del data, target, adv_data
+                            torch.cuda.empty_cache()
+                            torch.cuda.synchronize()  # Ensure CUDA operations are complete
 
-            models[depth] = (model, trainer)
+                            pbar.update(1)
+                            pbar.set_postfix({'samples': processed_samples})
 
-        return models
+                        except Exception as e:
+                            logging.error(
+                                f"Error in batch {batch_idx}: {str(e)}")
+                            continue
+
+                # Only process results if we have collected any
+                if adversarial_images:
+                    # Concatenate the results
+                    adversarial_images = torch.cat(adversarial_images, dim=0)
+                    labels_list = torch.cat(labels_list, dim=0)
+
+                    # Save all results as .png images
+                    output_dir_adv = os.path.join(output_dir, "adversarial")
+                    os.makedirs(output_dir_adv, exist_ok=True)
+
+                    for i in range(len(adversarial_images)):
+                        save_image(adversarial_images[i], os.path.join(
+                            output_dir_adv, f"adv_{split}_{i}.png"))
+
+                    logging.info(
+                        f"Saved {processed_samples} attacks as images to {output_dir_adv}")
+
+                    # Save metadata
+                    metadata = {
+                        'total_samples': len(data_loader.dataset),
+                        'attacked_samples': processed_samples,
+                        'attack_percentage': attack_percentages[split],
+                        'batch_size': self.args.train_batch,
+                        'attack_type': attack_type,
+                        'epsilon': self.args.epsilon,
+                        'storage_format': 'png'
+                    }
+                    torch.save(metadata, os.path.join(
+                        output_dir, "metadata.pt"))
+                    logging.info(f"Saved metadata to {output_dir}/metadata.pt")
+                else:
+                    logging.warning(
+                        f"No successful attacks generated for {split} split")
+
+            except Exception as e:
+                logging.error(
+                    f"Error during attack generation for {split}: {str(e)}")
+            finally:
+                # Clean up iteration-specific memory
+                for var in ['adversarial_images', 'labels_list']:
+                    if var in locals():
+                        del locals()[var]
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+
+        # Final cleanup after all splits are processed
+        del model, attack_trainer, models_and_names
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        gc.collect()
+
+    def run_defense(self):
+        # "task_name defense"
+        """Handle defense workflow"""
+        logging.info("Starting defense task")
+        # Implement defense logic
+        pass

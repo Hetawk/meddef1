@@ -8,6 +8,7 @@ torch-1.10.1+cu111-cp38-cp38-linux_x86_64.whl
 torchvision-0.10.0+cu111-cp38-cp38-linux_x86_64.whl
 
 dataset/
+processed_data/
 oooooout/
 out/
 out_ref/
@@ -29,6 +30,7 @@ __pycache__/train.cpython-312.pyc
 # Ignore analysis figures directory inside loader/data_analysis
 loader/data_analysis/analysis_figures/
 # Byte-compiled / optimized / DLL files
+__pycache__
 __pycache__/
 *.py[cod]
 *$py.class

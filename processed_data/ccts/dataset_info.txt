@@ -1,0 +1,57 @@
+Dataset: ccts
+==================================================
+
+Original Image Properties:
+  - Size: (409, 264)
+  - Channels: 4 (R, G, B, A)
+
+Target Processing Properties:
+  - Shape: (4, 224, 224)
+  - Channels: 4
+
+Split Information:
+--------------------
+
+TRAIN:
+Total images: 613
+Classes:
+Processed Image Properties:
+  - Size: (224, 224)
+  - Channels: 3 (R, G, B)
+Class Distribution:
+  - adenocarcinoma_left.lower.lobe_T2_N0_M0_Ib: 195 images
+  - large.cell.carcinoma_left.hilum_T2_N2_M0_IIIa: 115 images
+  - normal: 148 images
+  - squamous.cell.carcinoma_left.hilum_T1_N2_M0_IIIa: 155 images
+
+VAL:
+Total images: 72
+Classes:
+Processed Image Properties:
+  - Size: (224, 224)
+  - Channels: 3 (R, G, B)
+Class Distribution:
+  - adenocarcinoma_left.lower.lobe_T2_N0_M0_Ib: 23 images
+  - large.cell.carcinoma_left.hilum_T2_N2_M0_IIIa: 21 images
+  - normal: 13 images
+  - squamous.cell.carcinoma_left.hilum_T1_N2_M0_IIIa: 15 images
+
+TEST:
+Total images: 315
+Classes:
+Processed Image Properties:
+  - Size: (224, 224)
+  - Channels: 3 (R, G, B)
+Class Distribution:
+  - adenocarcinoma: 120 images
+  - large.cell.carcinoma: 51 images
+  - normal: 54 images
+  - squamous.cell.carcinoma: 90 images
+
+Total Dataset Images: 1000
+
+Preprocessing Information:
+--------------------
+Augmentation Settings:
+  - contrast_enhancement: False
+==================================================
