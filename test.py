@@ -48,6 +48,9 @@ def parse_test_args():
                         help='Type of attack for evaluation')
     parser.add_argument('--attack_eps', type=float, default=0.3,
                         help='Epsilon for adversarial attacks')
+    # New pretrained flag argument
+    parser.add_argument('--pretrained', type=lambda x: x.lower() == 'true',
+                        default=True, help='Flag whether to use pretrained weights')
     return parser.parse_args()
 
 
@@ -205,3 +208,12 @@ def main():
             probs = F.softmax(logits, dim=1)
             confidence, predicted_idx = torch.max(probs, dim=1)
         predicted_class = test_loader.dataset.classes[predicted_idx.item()]
+        # Logging and printing predicted class and confidence
+        logging.info(
+            f"Single Image Inference: Predicted class: {predicted_class} with confidence: {confidence.item():.4f}")
+        print(
+            f"Predicted class for image '{args.image_path}': {predicted_class} (confidence: {confidence.item():.4f})")
+
+
+if __name__ == "__main__":
+    main()

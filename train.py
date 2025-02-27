@@ -18,6 +18,7 @@ from utils.robustness.lr_scheduler import LRSchedulerLoader
 import json
 import warnings  # added import
 from tqdm import tqdm   # Added import for progress bar
+import torch.backends.cudnn  # Add this to ensure cudnn is recognized
 
 # added to suppress FutureWarning
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -122,6 +123,12 @@ def parse_args():
     parser.add_argument('--save_attacks', action='store_true',
                         help='Save generated adversarial samples')
 
+    # New arguments for defense:
+    parser.add_argument('--model_path', type=str, default='',
+                        help='Path to saved model weights')
+    parser.add_argument('--prune_rate', type=float, default=0.3,
+                        help='Pruning rate for defense task')
+
     args = parser.parse_args()
 
     # Process architecture names
@@ -132,7 +139,7 @@ def parse_args():
     if isinstance(args.depth, str):
         # Remove spaces and single quotes
         depth_str = args.depth.strip()
-        if (depth_str.startswith("'") and depth_str.endswith("'")):
+        if depth_str.startswith("'") and depth_str.endswith("'"):
             depth_str = depth_str[1:-1]
 
         try:
@@ -159,6 +166,26 @@ def parse_args():
     return args
 
 
+def _init_history():
+    return {
+        'epoch': [],
+        'loss': [],
+        'accuracy': [],
+        'duration': [],
+        'true_labels': [],
+        'predictions': [],
+        'val_loss': [],
+        'val_accuracy': [],
+        'val_predictions': [],
+        'val_targets': [],
+        # New adversarial metrics
+        'adv_loss': [],
+        'adv_accuracy': [],
+        'adv_predictions': [],
+        'adv_targets': []
+    }
+
+
 class Trainer:
     """Training orchestrator that handles the training loop and logging"""
 
@@ -178,39 +205,29 @@ class Trainer:
         self.device = device
         self.config = config
 
-        self.has_trained = False  # Add this line to initialize has_trained
-        # Also add this to get epochs from config
+        self.has_trained = False
         self.epochs = getattr(config, 'epochs', 100)
-        # For L2 regularization
         self.lambda_l2 = getattr(config, 'lambda_l2', 1e-4)
-        self.accumulation_steps = getattr(
-            config, 'accumulation_steps', 1)  # For gradient accumulation
-        self.args = config  # Store config as args for compatibility
+        self.accumulation_steps = getattr(config, 'accumulation_steps', 1)
+        self.args = config
         if not hasattr(self.args, 'lr'):
-            self.args.lr = 0.001  # Set default learning rate if not provided
+            self.args.lr = 0.001
 
-        # Initialize training components
         self.scaler = GradScaler()
         self.timer = Timer()
         self.training_logger = TrainingLogger()
-        self.history = self._init_history()
+        self.history = _init_history()
 
-        # Add visualization initialization
         from utils.visual.visualization import Visualization
         self.visualization = Visualization()
 
-        # Move model to device
         self.model.to(self.device)
-
-        # Apply regularization
         if hasattr(config, 'drop'):
             Regularization.apply_dropout(self.model, config.drop)
 
-        # Initialize adversarial components if needed
         self.adversarial = getattr(config, 'adversarial', False)
         if self.adversarial:
             from gan.defense.adv_train import AdversarialTraining
-            # Add attack name and epsilon to config if not already present
             if not hasattr(config, 'attack_name'):
                 config.attack_name = getattr(config, 'attack_type', 'fgsm')
             if not hasattr(config, 'epsilon'):
@@ -220,49 +237,35 @@ class Trainer:
             logging.info(
                 f"Training {self.model_name} with adversarial training...")
 
-        # Add error_if_nonfinite parameter for gradient clipping
-        self.error_if_nonfinite = False  # Always set to False to avoid the warning
-        self.val_loss = float('inf')  # Add this line to store validation loss
-
-        # Initialize training states
+        self.error_if_nonfinite = False
         self.val_loss = float('inf')
         self.current_lr = self.args.lr
         self.best_val_loss = float('inf')
         self.best_val_acc = 0.0
         self.no_improvement_count = 0
+        self.adv_metrics = AdversarialMetrics()
 
-        self.adv_metrics = AdversarialMetrics()  # Initialize AdversarialMetrics
+        # Initialize the lists here for test results
+        self.true_labels = []
+        self.predictions = []
+        self.adv_predictions = []
 
-    def _init_history(self):
-        return {
-            'epoch': [],
-            'loss': [],
-            'accuracy': [],
-            'duration': [],
-            'true_labels': [],
-            'predictions': [],
-            'val_loss': [],
-            'val_accuracy': [],
-            'val_predictions': [],
-            'val_targets': [],
-            # New adversarial metrics
-            'adv_loss': [],
-            'adv_accuracy': [],
-            'adv_predictions': [],
-            'adv_targets': []
-        }
-
-    def set_random_seed(self, seed):
+    @staticmethod
+    def _setup_random_seeds(self, seed):
+        if seed is None:
+            seed = random.randint(1, 10000)
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
 
     def get_model_params(self):
         return sum(p.numel() for p in self.model.parameters()) / 1000000.0
 
-    def train(self, patience, adversarial=False):
+    def train(self, patience):
         if self.has_trained:
             logging.warning(
                 f"{self.model} has already been trained. Training again will overwrite the existing model.")
@@ -271,47 +274,37 @@ class Trainer:
         self.has_trained = True
 
         torch.cuda.empty_cache()
-
-        # Set CUDA_LAUNCH_BLOCKING
         os.environ['CUDA_LAUNCH_BLOCKING'] = str(self.device)
 
         self.model.train()
-        best_loss = float('inf')
-        patience_counter = 0
         total_batches = len(self.train_loader)
-        log_points = [0, total_batches // 2, total_batches - 1]
+        # log_points = [0, total_batches // 2, total_batches - 1]
         initial_params = self.get_model_params()
+        logging.info(f"Initial model parameters: {initial_params:.2f}M")
 
-        start_time = datetime.now()  # Move start_time to beginning of training
-        saved_attacks = False  # New flag to save samples once
+        # No need to store start_time if not used besides logging—included in progress log below.
+        saved_attacks = False
 
         for epoch in range(self.epochs):
-            epoch_start_time = datetime.now()  # Add epoch start time
             self.model.train()
             epoch_loss = 0.0
             correct = 0
             total = 0
             batch_loss = 0.0
-            # Add adversarial tracking variables
             adv_loss_sum = 0.0
-            adv_correct = 0
-
-            # Reset metrics for each epoch
+            adv_correct = 0  # Initialize adv_correct
+            # Prepare lists to log epoch results
             epoch_true_labels = []
             epoch_predictions = []
             self.optimizer.zero_grad(set_to_none=True)
 
-            # Use tqdm to wrap the train loader
             for batch_idx, (data, target) in enumerate(tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{self.epochs}", unit="batch")):
                 try:
-                    # Add batch indices for attack loading
-                    batch_start = batch_idx * self.train_loader.batch_size
-                    batch_indices = torch.arange(
-                        batch_start, batch_start + len(data))
-
-                    # 1. Data preparation
-                    data = data.to(self.device, non_blocking=True)
-                    target = target.to(self.device, non_blocking=True)
+                    # Data preparation: remove unused batch_indices
+                    if isinstance(data, torch.Tensor):
+                        data = data.to(self.device, non_blocking=True)
+                    if isinstance(target, torch.Tensor):
+                        target = target.to(self.device, non_blocking=True)
 
                     if self.adversarial and not saved_attacks and epoch == 0 and batch_idx == 0:
                         orig, adv_data, _ = self.adversarial_trainer.attack.attack(
@@ -324,42 +317,29 @@ class Trainer:
                         output = self.model(data)
                         loss = self.criterion(output, target)
                         if self.adversarial:
-                            adv_output = None
-                            # Get adversarial samples and compute loss
                             if hasattr(self.adversarial_trainer.attack, 'generate'):
                                 adv_data = self.adversarial_trainer.attack.generate(
                                     data, target, self.args.epsilon)
                             else:
                                 _, adv_data, _ = self.adversarial_trainer.attack.attack(
                                     data, target)
-
                             with autocast():
-                                adv_output = self.model(adv_data)
                                 adv_batch_loss = self.criterion(
-                                    adv_output, target)
-                                adv_loss_sum += adv_batch_loss.item()
-
-                                # Track adversarial accuracy
-                                adv_pred = adv_output.argmax(
-                                    dim=1, keepdim=True)
-                                adv_correct += adv_pred.eq(
-                                    target.view_as(adv_pred)).sum().item()
-
-                                # Combined loss
-                                w = float(self.args.adv_weight)
-                                loss = (1 - w) * loss + w * adv_batch_loss
+                                    self.model(adv_data), target)
+                            adv_loss_sum += adv_batch_loss.item()
+                            adv_pred = self.model(adv_data).argmax(
+                                dim=1, keepdim=True)
+                            adv_correct += adv_pred.eq(
+                                target.view_as(adv_pred)).sum().item()
+                            w = float(self.args.adv_weight)
+                            loss = (1 - w) * loss + w * adv_batch_loss
                         loss = loss / self.accumulation_steps
-                    # Check if loss is finite before backward pass
                     if not torch.isfinite(loss):
                         logging.debug(
                             f"Non-finite loss encountered at batch {batch_idx}. Skipping batch.")
                         self.optimizer.zero_grad(set_to_none=True)
                         continue
-
-                    # Backward pass with gradient scaling (only once)
                     self.scaler.scale(loss).backward()
-
-                    # 4. Metrics update
                     with torch.no_grad():
                         batch_loss += loss.item() * self.accumulation_steps
                         pred = output.argmax(dim=1, keepdim=True)
@@ -367,67 +347,35 @@ class Trainer:
                         total += target.size(0)
                         epoch_true_labels.extend(target.cpu().numpy())
                         epoch_predictions.extend(pred.cpu().numpy())
-
-                    # 5. Gradient accumulation step
                     if (batch_idx + 1) % self.accumulation_steps == 0:
-                        # First unscale the gradients
                         self.scaler.unscale_(self.optimizer)
-
-                        # Clip gradients
-                        torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(),
-                            max_norm=self.args.max_grad_norm,
-                            error_if_nonfinite=False
-                        )
-
-                        # Step optimizer and scaler
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(
+                        ), max_norm=self.args.max_grad_norm, error_if_nonfinite=False)
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
-
-                        # Zero gradients
                         self.optimizer.zero_grad(set_to_none=True)
-
-                        # Update running loss
                         epoch_loss += batch_loss
                         batch_loss = 0.0
-
-                    # 6. Learning rate scheduling
-                    if batch_idx % 100 == 0:  # Adjust frequency as needed
-                        current_lr = self.optimizer.param_groups[0]['lr']
-                        if current_lr != self.current_lr:
-                            logging.info(
-                                f'Learning rate changed from {self.current_lr} to {current_lr}')
-                            self.current_lr = current_lr
-
-                except RuntimeError as e:
-                    logging.error(
-                        f"Runtime error in batch {batch_idx}: {str(e)}")
+                    if batch_idx % 100 == 0:
+                        logging.info(
+                            f'Epoch: {epoch+1}/{self.epochs} | Batch: {batch_idx * len(data)}/{len(self.train_loader.dataset)} | Loss: {loss.item():.4f} | Accuracy: {correct/total if total else 0:.4f}')
+                except RuntimeError as err:
+                    logging.error(f"Runtime error in batch {batch_idx}: {err}")
                     self.optimizer.zero_grad(set_to_none=True)
-                    self.scaler = GradScaler()  # Reset scaler state
+                    self.scaler = GradScaler()
                     continue
-
-                except Exception as e:
+                except Exception as exp:
                     logging.exception(
-                        f"Unexpected error in batch {batch_idx}:")
+                        f"Unexpected error in batch {batch_idx}: {exp}")
                     self.optimizer.zero_grad(set_to_none=True)
                     continue
 
-                # 7. Logging
-                if batch_idx in log_points:
-                    self._log_training_progress(
-                        epoch, batch_idx, data, loss, correct, total, epoch_start_time)
-
-            # 8. End of epoch validation and LR scheduling
             val_loss, val_accuracy = self.validate()
-
-            # Update learning rate scheduler
             if self.scheduler is not None:
                 if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                     self.scheduler.step(val_loss)
                 else:
                     self.scheduler.step()
-
-            # 9. Early stopping check
             if val_loss < self.best_val_loss:
                 self.best_val_loss = val_loss
                 self.best_val_acc = val_accuracy
@@ -436,76 +384,43 @@ class Trainer:
                     f"save_model/best_{self.model_name}_{self.dataset_name}.pth")
             else:
                 self.no_improvement_count += 1
-
             if self.no_improvement_count >= patience:
                 logging.info(
                     f"Early stopping triggered after {epoch + 1} epochs")
                 break
 
-            # 10. Update history and log epoch results
             epoch_acc = correct / total if total > 0 else 0
-            adv_acc = adv_correct / total if total > 0 and self.adversarial else 0
-            avg_adv_loss = adv_loss_sum / \
-                len(self.train_loader) if self.adversarial else 0
-
-            # Update adversarial metrics
-            self.adv_metrics.update_adversarial_comparison(
-                phase='train',
-                clean_loss=epoch_loss / len(self.train_loader),
-                clean_acc=epoch_acc,
-                adv_loss=avg_adv_loss,
-                adv_acc=adv_acc
-            )
-
-            # Log progress with both clean and adversarial metrics
+            adv_accuracy = (
+                adv_correct / total) if (self.adversarial and total > 0) else 0
+            avg_adv_loss = (adv_loss_sum / len(self.train_loader)
+                            ) if self.adversarial else 0
+            self.adv_metrics.update_adversarial_comparison(phase='train', clean_loss=epoch_loss / len(
+                self.train_loader), clean_acc=epoch_acc, adv_loss=avg_adv_loss, adv_acc=adv_accuracy)
             if self.adversarial:
-                logging.info(f'Epoch {epoch+1} Training - Clean: Loss={epoch_loss/len(self.train_loader):.4f}, '
-                             f'Acc={epoch_acc:.4f} | Adversarial: Loss={avg_adv_loss:.4f}, Acc={adv_acc:.4f}')
+                logging.info(
+                    f'Epoch {epoch+1} Training - Clean: Loss={epoch_loss/len(self.train_loader):.4f}, Acc={epoch_acc:.4f} | Adversarial: Loss={avg_adv_loss:.4f}, Acc={adv_accuracy:.4f}')
             else:
-                logging.info(f'Epoch {epoch+1} Training - Loss={epoch_loss/len(self.train_loader):.4f}, '
-                             f'Acc={epoch_acc:.4f}')
-
-            self._update_history(
-                epoch=epoch,
-                epoch_loss=epoch_loss,
-                correct=correct,
-                total=total,
-                val_loss=val_loss,
-                val_accuracy=val_accuracy,
-                epoch_true_labels=epoch_true_labels,
-                epoch_predictions=epoch_predictions,
-                start_time=epoch_start_time
-            )
-
-            # Visualize training progress
+                logging.info(
+                    f'Epoch {epoch+1} Training - Loss={epoch_loss/len(self.train_loader):.4f}, Acc={epoch_acc:.4f}')
+            self._update_history(epoch, epoch_loss, correct, total, val_loss, val_accuracy,
+                                 epoch_true_labels, epoch_predictions, 0)  # duration not used
             self.visualization.visualize_adversarial_training(
-                self.adv_metrics.metrics,
-                self.task_name,
-                self.dataset_name,
-                self.model_name
-            )
-
+                self.adv_metrics.metrics, self.task_name, self.dataset_name, self.model_name)
         return self.best_val_loss, self.best_val_acc
 
     def _log_training_progress(self, epoch, batch_idx, data, loss, correct, total, start_time):
-        """Helper method to log training progress"""
-        accuracy = correct / total if total > 0 else 0  # Prevent division by zero
+        accuracy = correct / total if total > 0 else 0
         current_time = datetime.now()
         duration = Timer.format_duration(
             (current_time - start_time).total_seconds())
-        logging.info(f'Epoch: {epoch + 1}/{self.epochs} '
-                     f'| Batch: {batch_idx * len(data)}/{len(self.train_loader.dataset)} '
-                     f'| Loss: {loss.item():.4f} | Accuracy: {accuracy:.4f} '
-                     f'| LR: {self.current_lr:.6f}')
+        logging.info(
+            f'Epoch: {epoch+1}/{self.epochs} | Batch: {batch_idx * len(data)}/{len(self.train_loader.dataset)} | Loss: {loss.item():.4f} | Accuracy: {accuracy:.4f} | Duration: {duration}')
 
-    def _update_history(self, epoch, epoch_loss, correct, total, val_loss, val_accuracy,
-                        epoch_true_labels, epoch_predictions, start_time):
-        """Helper method to update training history"""
-        accuracy = correct / total if total > 0 else 0  # Prevent division by zero
+    def _update_history(self, epoch, epoch_loss, correct, total, val_loss, val_accuracy, epoch_true_labels, epoch_predictions, start_time):
+        accuracy = correct / total if total > 0 else 0
         end_time = datetime.now()
         epoch_duration = Timer.format_duration(
-            (end_time - start_time).total_seconds())
-
+            (end_time - start_time).total_seconds()) if start_time else None
         self.history['epoch'].append(epoch + 1)
         self.history['loss'].append(epoch_loss)
         self.history['accuracy'].append(accuracy)
@@ -514,32 +429,30 @@ class Trainer:
         self.history['val_accuracy'].append(val_accuracy)
         self.history['true_labels'].append(epoch_true_labels)
         self.history['predictions'].append(epoch_predictions)
-        self.history['val_predictions'].append(self.history['val_predictions'])
-        self.history['val_targets'].append(self.history['val_targets'])
+        self.history['val_predictions'].append([])  # placeholder
+        self.history['val_targets'].append([])        # placeholder
 
     def validate(self):
-        """Validate the model on validation set with additional metrics"""
         self.model.eval()
         val_loss = 0
-        adv_val_loss = 0  # For adversarial validation loss
+        adv_val_loss = 0
         correct = 0
-        adv_correct = 0  # For adversarial accuracy
+        adv_correct = 0
         total = 0
         val_predictions = []
         val_targets = []
-
+        adv_accuracy = 0  # Initialize
         try:
             with torch.no_grad():
                 for batch_idx, (data, target) in enumerate(self.val_loader):
-                    data = data.to(self.device, non_blocking=True)
-                    target = target.to(self.device, non_blocking=True)
-                    # Normal forward pass
+                    if isinstance(data, torch.Tensor):
+                        data = data.to(self.device, non_blocking=True)
+                    if isinstance(target, torch.Tensor):
+                        target = target.to(self.device, non_blocking=True)
                     with autocast():
                         output = self.model(data)
                         loss = self.criterion(output, target)
                     val_loss += loss.item()
-
-                    # Adversarial validation if enabled
                     if self.adversarial:
                         with torch.enable_grad():
                             if hasattr(self.adversarial_trainer.attack, 'generate'):
@@ -555,51 +468,36 @@ class Trainer:
                         adv_pred = adv_output.argmax(dim=1, keepdim=True)
                         adv_correct += adv_pred.eq(
                             target.view_as(adv_pred)).sum().item()
-
                     pred = output.argmax(dim=1, keepdim=True)
                     correct += pred.eq(target.view_as(pred)).sum().item()
                     total += target.size(0)
                     val_predictions.extend(pred.cpu().numpy())
                     val_targets.extend(target.cpu().numpy())
-
                     if batch_idx % 100 == 0:
                         logging.debug(
                             f'Validation Batch: {batch_idx}/{len(self.val_loader)}')
-
-            val_loss = val_loss / len(self.val_loader)
+            val_loss /= len(self.val_loader)
             accuracy = correct / total if total > 0 else 0
-
             if self.adversarial:
-                adv_val_loss = adv_val_loss / len(self.val_loader)
+                adv_val_loss /= len(self.val_loader)
                 adv_accuracy = adv_correct / total if total > 0 else 0
-                logging.info(f'Validation - Clean: Loss={val_loss:.4f}, Acc={accuracy:.4f} | '
-                             f'Adversarial: Loss={adv_val_loss:.4f}, Acc={adv_accuracy:.4f}')
+                logging.info(
+                    f'Validation - Clean: Loss={val_loss:.4f}, Acc={accuracy:.4f} | Adversarial: Loss={adv_val_loss:.4f}, Acc={adv_accuracy:.4f}')
             else:
                 logging.info(
                     f'Validation Loss: {val_loss:.4f}, Accuracy: {accuracy:.4f}')
-
             self.history['val_predictions'].append(val_predictions)
             self.history['val_targets'].append(val_targets)
-
-            # Update adversarial metrics
-            self.adv_metrics.update_adversarial_comparison(
-                phase='val',
-                clean_loss=val_loss,
-                clean_acc=accuracy,
-                adv_loss=adv_val_loss if self.adversarial else 0,
-                adv_acc=adv_accuracy if self.adversarial else 0
-            )
-
+            self.adv_metrics.update_adversarial_comparison(phase='val', clean_loss=val_loss, clean_acc=accuracy,
+                                                           adv_loss=adv_val_loss if self.adversarial else 0, adv_acc=adv_accuracy if self.adversarial else 0)
         except Exception as e:
-            logging.error(f"Error during validation: {str(e)}")
+            logging.error(f"Error during validation: {e}")
             return float('inf'), 0.0
         finally:
             self.model.train()
-
         return val_loss, accuracy
 
     def test(self):
-        """Enhanced test method with adversarial evaluation"""
         self.model.eval()
         test_loss = 0
         adv_test_loss = 0
@@ -609,68 +507,57 @@ class Trainer:
         self.true_labels = []
         self.predictions = []
         self.adv_predictions = []
-
+        adv_test_accuracy = 0  # Initialize
         with torch.no_grad():
             for data, target in self.test_loader:
-                data, target = data.to(self.device), target.to(self.device)
-
-                # Clean predictions
+                if isinstance(data, torch.Tensor):
+                    data = data.to(self.device)
+                if isinstance(target, torch.Tensor):
+                    target = target.to(self.device)
                 output = self.model(data)
                 test_loss += self.criterion(output, target).item()
                 pred = output.argmax(dim=1, keepdim=True)
                 correct += pred.eq(target.view_as(pred)).sum().item()
-
-                # Adversarial predictions if enabled
                 if self.adversarial:
-                    with torch.enable_grad():  # Needed for attack generation
+                    with torch.enable_grad():
                         if hasattr(self.adversarial_trainer.attack, 'generate'):
                             adv_data = self.adversarial_trainer.attack.generate(
                                 data, target, self.args.epsilon)
                         else:
                             _, adv_data, _ = self.adversarial_trainer.attack.attack(
                                 data, target)
-
                     adv_output = self.model(adv_data)
                     adv_test_loss += self.criterion(adv_output, target).item()
                     adv_pred = adv_output.argmax(dim=1, keepdim=True)
-                    adv_correct += adv_pred.eq(
-                        target.view_as(adv_pred)).sum().item()
+                    adv_correct += adv_pred.eq(target.view_as(adv_pred)
+                                               ).sum().item()
                     self.adv_predictions.extend(adv_output.cpu().numpy())
-
                 total += target.size(0)
                 self.true_labels.extend(target.cpu().numpy())
                 self.predictions.extend(output.cpu().numpy())
-
-        # Calculate final metrics
         test_loss /= len(self.test_loader)
         accuracy = correct / total if total > 0 else 0
-
         if self.adversarial:
             adv_test_loss /= len(self.test_loader)
-            adv_accuracy = adv_correct / total if total > 0 else 0
-            logging.info(f'Test Results - Clean: Loss={test_loss:.4f}, Acc={accuracy:.4f} | '
-                         f'Adversarial: Loss={adv_test_loss:.4f}, Acc={adv_accuracy:.4f}')
+            adv_test_accuracy = adv_correct / total if total > 0 else 0
+            logging.info(
+                f'Test Results - Clean: Loss={test_loss:.4f}, Acc={accuracy:.4f} | Adversarial: Loss={adv_test_loss:.4f}, Acc={adv_test_accuracy:.4f}')
         else:
             logging.info(
                 f'Test Results - Loss={test_loss:.4f}, Accuracy={accuracy:.4f}')
-
         self.model.train()
-        return (test_loss, accuracy) if not self.adversarial else (test_loss, accuracy, adv_test_loss, adv_accuracy)
+        return (test_loss, accuracy) if not self.adversarial else (test_loss, accuracy, adv_test_loss, adv_test_accuracy)
 
     def save_model(self, path):
         filename, ext = os.path.splitext(path)
-        # Include epochs, learning rate, batch size, and timestamp in the filename
         timestamp = datetime.now().strftime("%Y%m%d")
         filename = f"{filename}_epochs{self.epochs}_lr{self.args.lr}_batch{self.args.train_batch}_{timestamp}{ext}"
-
-        # If adversarial training, add 'adv' subfolder to the path
         if self.adversarial:
-            path = os.path.join('out', self.task_name, self.dataset_name,
-                                self.model_name, 'adv', filename)
+            path = os.path.join(
+                'out', self.task_name, self.dataset_name, self.model_name, 'adv', filename)
         else:
-            path = os.path.join('out', self.task_name, self.dataset_name,
-                                self.model_name, filename)
-
+            path = os.path.join('out', self.task_name,
+                                self.dataset_name, self.model_name, filename)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save(self.model.state_dict(), path)
         logging.info(f'Model saved to {path}')
@@ -716,11 +603,20 @@ class Trainer:
         logging.info(f'Training history saved to {filename}')
 
     def get_test_results(self):
-        # Convert true_labels and predictions to NumPy arrays
         return np.array(self.true_labels), np.array(self.predictions)
 
     def load_model(self, path):
-        self.model.load_state_dict(torch.load(path))
+        state = torch.load(path, map_location=self.device)
+        new_state = {}
+        for key, value in state.items():
+            if key.endswith('weight_orig'):
+                new_key = key[:-len('_orig')]
+                new_state[new_key] = value
+            elif key.endswith('weight_mask'):
+                continue
+            else:
+                new_state[key] = value
+        self.model.load_state_dict(new_state)
         self.model.to(self.device)
         self.model.eval()
         logging.info(f"Loaded model from {path}")
@@ -733,8 +629,9 @@ class TrainingManager:
 
         # Setup random seed - simplified version
         seed = getattr(args, 'manualSeed', None)
-        if (seed is None):
+        if seed is None:
             seed = random.randint(1, 10000)
+        # Now this method accepts seed correctly
         self._setup_random_seeds(seed)
 
         # Initialize components
@@ -747,8 +644,11 @@ class TrainingManager:
         self.optimizer_loader = OptimizerLoader()
         self.lr_scheduler_loader = LRSchedulerLoader()
 
+    # Remove @staticmethod so that 'seed' is passed in properly.
     def _setup_random_seeds(self, seed):
         """Setup random seeds for reproducibility"""
+        if seed is None:
+            seed = random.randint(1, 10000)
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
@@ -771,8 +671,14 @@ class TrainingManager:
             pin_memory=getattr(self.args, 'pin_memory', True)
         )
 
-        # Get number of classes from the dataset
-        num_classes = len(train_loader.dataset.classes)
+        # Get number of classes from the dataset: ensure that dataset has a 'classes' attribute.
+        dataset = train_loader.dataset
+        if hasattr(dataset, 'classes'):
+            num_classes = len(dataset.classes)
+        elif hasattr(dataset, 'class_to_idx'):
+            num_classes = len(dataset.class_to_idx)
+        else:
+            raise AttributeError("Dataset does not contain class information.")
 
         # Get model for each architecture specified
         for arch in self.args.arch:

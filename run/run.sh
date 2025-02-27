@@ -3,14 +3,31 @@
 # Activate virtual environment if needed
 # source ./venv/bin/activate
 #train on ccts
-python main.py --data ccts --arch meddef1_ --depth '{"meddef1_": [1.0,1.1,1.2]}' --train_batch 32 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 0 --task_name normal_training --optimizer adam
 
-python main.py --data ccts --arch resnet --depth '{"resnet": [18,34,50]}' --train_batch 32 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 0 --task_name normal_training --optimizer adam
-python main.py --data ccts --arch vgg --depth '{"vgg": [11,16,19]}' --train_batch 32 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 0 --task_name normal_training --optimizer adam
+### MedDef
+python main.py --data rotc --arch meddef1_ --depth '{"meddef1_": [1.0]}' --train_batch 64 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 1 --task_name normal_training --optimizer adam
 
-python main.py --data ccts --arch densenet --depth '{"densenet": [121,169]}' --train_batch 32 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 0 --task_name normal_training --optimizer adam
+python main.py --data ccts --arch meddef1_ --depth '{"meddef1_": [1.0]}' --train_batch 32 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 1 --task_name normal_training --optimizer adam
 
-#
+python main.py --data chest_xray --arch meddef1_ --depth '{"meddef1_": [1.0}' --train_batch 32 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 1 --task_name normal_training --optimizer adam
+
+### Resnet
+
+python main.py --data rotc --arch resnet --depth '{"resnet": [18]}' --train_batch 64 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 1 --task_name normal_training --optimizer adam
+
+python main.py --data ccts --arch resnet --depth '{"resnet": [18]}' --train_batch 32 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 1 --task_name normal_training --optimizer adam
+
+python main.py --data chest_xray --arch resnet --depth '{"resnet": [18}' --train_batch 32 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 1 --task_name normal_training --optimizer adam
+
+
+### Densenet
+python main.py --data rotc --arch densenet --depth '{"densenet": [121]}' --train_batch 64 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 1 --task_name normal_training --optimizer adam
+
+python main.py --data ccts --arch densenet --depth '{"densenet": [121]}' --train_batch 32 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 1 --task_name normal_training --optimizer adam
+
+python main.py --data chest_xray --arch densenet --depth '{"densenet": [121}' --train_batch 32 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 1 --task_name normal_training --optimizer adam
+
+
 ## train on rotc
 #python main.py --data rotc --arch meddef1_ --depth '{"meddef1_": [1.0]}' --train_batch 32 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 0 --task_name normal_training --optimizer adam
 #
