@@ -124,7 +124,64 @@ python main.py --data rotc --arch meddef1_ --depth '{"meddef1_": [1.0]}' --train
 ```
 
 
+### defense
+```bash
+### test before prune -> normal image normal train
+python test.py --data rotc --arch meddef1_ --depth 1.0 --model_path "out/normal_training/rotc/meddef1__1.0/adv/save_model/best_meddef1__1.0_rotc_epochs100_lr0.001_batch64_20250224.pth" --image_path "processed_data/rotc/test/NORMAL/NORMAL-9251-1.jpeg"
 
+### test before prune -> adversarial image normal train
+python test.py --data rotc --arch meddef1_ --depth 1.0 --model_path "out/normal_training/rotc/meddef1__1.0/adv/save_model/best_meddef1__1.0_rotc_epochs100_lr0.001_batch64_20250224.pth" --image_path "out/attacks/rotc/meddef1__1.0/fgsm/train/adversarial/adv_train_0.png"
+
+
+### test before prune -> normal image | adversarial train
+
+
+## pruning
+python main.py --data rotc --arch meddef1_ --depth '{"meddef1_": [1.0]}' --task_name defense --model_path "out/normal_training/rotc/meddef1__1.0/save_model/best_meddef1__1.0_rotc_epochs100_lr0.001_batch64_20250221.pth" --prune_rate 0.3
+
+
+### test before prune
+python test.py --data rotc --arch meddef1_ --depth 1.0 --model_path "out/normal_training/rotc/meddef1__1.0/save_model/best_meddef1__1.0_rotc_epochs100_lr0.001_batch64_20250221.pth" --image_path "processed_data/rotc/test/NORMAL/NORMAL-9251-1.jpeg"
+
+
+### test adversarial
+python test.py --data rotc --arch meddef1_ --depth 1.0 --model_path "out/defense/rotc/meddef1__1.0/save_model/pruned_meddef1__1.0_epochs100_lr0.001_batch32_20250224.pth" --image_path "processed_data/rotc/test/NORMAL/NORMAL-9251-1.jpeg" --task_name defense
+
+
+```
+
+### Robustness Test
+```bash
+#### Evaluate a single model against multiple attacks and pruning rates:
+python evaluate_attacks.py --data chest_xray --arch meddef1_ --depth 1.0 --model_path "out/normal_training/chest_xray/meddef1__1.0/save_model/best_meddef1__1.0_chest_xray_epochs100_lr0.0001_batch16_20250227.pth" --attack_types fgsm pgd bim --attack_eps 0.1 --prune_rates 0.0 0.1 0.3 0.5 0.7 --batch_size 32 --num_workers 4 --pin_memory --gpu-ids 1
+
+#### Compare a specific attack at a single pruning rate:
+python evaluate_attacks.py --data chest_xray --arch meddef1_ --depth 1.0 --model_path "out/normal_training/chest_xray/meddef1__1.0/save_model/best_meddef1__1.0_chest_xray_epochs100_lr0.0001_batch16_20250227.pth" --attack_types fgsm --attack_eps 0.1 --prune_rates 0.3 --gpu-ids 1
+
+#### testing different models
+
+# For ResNet model
+python evaluate_attacks.py --data chest_xray --arch resnet  --depth 18 --model_path "out/normal_training/chest_xray/resnet_18/save_model/best_resnet_18_chest_xray_epochs100_lr0.001_batch32_20250227.pth" --attack_types fgsm pgd --prune_rates 0.0 0.3 0.5 --gpu-ids 1
+
+# For MedDef model
+python evaluate_attacks.py --data chest_xray --arch meddef1_ --depth 1.0 --model_path "out/normal_training/chest_xray/meddef1__1.0/save_model/best_meddef1__1.0_chest_xray_epochs100_lr0.0001_batch16_20250227.pth" --attack_types fgsm pgd --prune_rates 0.0 0.3 0.5 --gpu-ids 1
+
+# For Densenet
+python evaluate_attacks.py --data rotc --arch densenet --depth 121 --model_path "out/normal_training/rotc/densenet_121/adv/save_model/best_densenet_121_rotc_epochs100_lr0.0001_batch32_20250228.pth" --attack_types fgsm pgd bim --attack_eps 0.2 --prune_rates 0.0 0.1 0.3 0.5 0.7 --batch_size 32 --num_workers 4 --pin_memory --gpu-ids 1
+
+python evaluate_attacks.py --data rotc --arch densenet --depth 121 --model_path "out/normal_training/rotc/densenet_121/adv/save_model/best_densenet_121_rotc_epochs100_lr0.0001_batch32_20250228.pth" --attack_types cw zoo boundary elasticnet onepixel fgsm pgd bim jsma --attack_eps 0.2 --prune_rates 0.0 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 --batch_size 32 --num_workers 4 --pin_memory --gpu-ids 1
+
+```
+
+
+### Salient Map
+```bash
+python generate_saliency_maps.py --data chest_xray --arch meddef1_ --depth 1.0 --model_path "out/normal_training/chest_xray/meddef1__1.0/save_model/best_meddef1__1.0_chest_xray_epochs100_lr0.0001_batch16_20250227.pth"  --image_path "out/normal_training/chest_xray/resnet_18/attack/fgsm/sample_0_adv.png"
+
+
+python generate_saliency_maps.py --data rotc --arch densenet --depth 121 --model_path "out/normal_training/rotc/densenet_121/adv/save_model/best_densenet_121_rotc_epochs100_lr0.0001_batch32_20250228.pth"  --image_path "out/normal_training/rotc/densenet_121/attack/fgsm/sample_0_adv.png"
+
+```
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a pull request or open an issue if you have any suggestions or improvements.

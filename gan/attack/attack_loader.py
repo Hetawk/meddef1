@@ -1,10 +1,17 @@
 import logging
 import torch
 from tqdm import tqdm
-from gan.attack.fgsm import FGSMAttack   # Ensure these implementations exist
+
+# Import all attack implementations
+from gan.attack.fgsm import FGSMAttack
 from gan.attack.pgd import PGDAttack
 from gan.attack.jsma import JSMAAttack
-from gan.attack.bim import BIMAttack     # Import the BIM implementation
+from gan.attack.bim import BIMAttack
+from gan.attack.cw import CWAttack
+from gan.attack.zoo import ZooAttack
+from gan.attack.boundary import BoundaryAttack
+from gan.attack.elasticnet import ElasticNetAttack
+from gan.attack.onepixel import OnePixelAttack
 
 
 class AttackLoader:
@@ -21,7 +28,12 @@ class AttackLoader:
             'fgsm': FGSMAttack,
             'pgd': PGDAttack,
             'bim': BIMAttack,
-            'jsma': JSMAAttack
+            'jsma': JSMAAttack,
+            'cw': CWAttack,
+            'zoo': ZooAttack,
+            'boundary': BoundaryAttack,
+            'elasticnet': ElasticNetAttack,
+            'onepixel': OnePixelAttack
         }
 
     def get_attack(self, attack_name):
@@ -36,10 +48,46 @@ class AttackLoader:
             if epsilon is None:
                 epsilon = getattr(self.config, 'attack_eps', 0.3)
 
+            # Handle different types of attacks with appropriate parameters
             if key in ['pgd', 'bim']:
                 alpha = getattr(self.config, 'attack_alpha', 0.01)
                 steps = getattr(self.config, 'attack_steps', 40)
                 return self.supported_attacks[key](self.model, epsilon, alpha, steps)
+            
+            elif key == 'cw':
+                c = getattr(self.config, 'attack_c', 1.0)
+                iterations = getattr(self.config, 'attack_iterations', 100)
+                lr = getattr(self.config, 'attack_lr', 0.01)
+                binary_search_steps = getattr(self.config, 'attack_binary_steps', 9)
+                confidence = getattr(self.config, 'attack_confidence', 0)
+                return self.supported_attacks[key](self.model, epsilon, c, iterations, lr, binary_search_steps, confidence)
+            
+            elif key == 'zoo':
+                iterations = getattr(self.config, 'attack_iterations', 100)
+                h = getattr(self.config, 'attack_h', 0.001)
+                binary_search_steps = getattr(self.config, 'attack_binary_steps', 5)
+                return self.supported_attacks[key](self.model, epsilon, iterations, h, binary_search_steps)
+                
+            elif key == 'boundary':
+                steps = getattr(self.config, 'attack_steps', 50)
+                spherical_step = getattr(self.config, 'attack_spherical_step', 0.01)
+                source_step = getattr(self.config, 'attack_source_step', 0.01)
+                step_adaptation = getattr(self.config, 'attack_step_adaptation', 1.5)
+                max_directions = getattr(self.config, 'attack_max_directions', 25)
+                return self.supported_attacks[key](self.model, epsilon, steps, spherical_step, source_step, step_adaptation, max_directions)
+                
+            elif key == 'elasticnet':
+                alpha = getattr(self.config, 'attack_alpha', 0.01)
+                iterations = getattr(self.config, 'attack_iterations', 40)
+                beta = getattr(self.config, 'attack_beta', 1.0)
+                return self.supported_attacks[key](self.model, epsilon, alpha, iterations, beta)
+                
+            elif key == 'onepixel':
+                pixel_count = getattr(self.config, 'attack_pixel_count', 1)
+                max_iter = getattr(self.config, 'attack_max_iter', 100)
+                popsize = getattr(self.config, 'attack_popsize', 10)
+                return self.supported_attacks[key](self.model, epsilon, pixel_count, max_iter, popsize)
+                
             else:
                 # For FGSM and JSMA
                 return self.supported_attacks[key](self.model, epsilon)

@@ -5,6 +5,8 @@ from tqdm import tqdm
 
 import torch
 from torchvision.utils import save_image
+from gan.defense.prune import Pruner
+from train import Trainer
 
 # from gan.defense.defense_loader import DefenseLoader
 from loader.dataset_loader import DatasetLoader
@@ -279,15 +281,14 @@ class TaskHandler:
             model.eval()
             logging.info(f"Loaded model weights from {self.args.model_path}")
 
-        # Use your existing Pruner class for pruning
-        from gan.defense.prune import Pruner
+        
         prune_rate = getattr(self.args, "prune_rate", 0.3)
         pruner = Pruner(model, prune_rate)
         pruned_model = pruner.unstructured_prune()
         logging.info("Model pruning completed.")
 
         # Instantiate a Trainer (which has a test() method) for evaluation
-        from train import Trainer
+        
         trainer = Trainer(
             model=pruned_model,
             train_loader=test_loader,  # dummy loader for Trainer interface

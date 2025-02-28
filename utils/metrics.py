@@ -35,113 +35,77 @@ class Metrics:
                     np.sum(bin_mask) / len(prob_max)
         return ece
 
-    @staticmethod
-    def calculate_metrics(true_labels: np.ndarray,
-                          all_predictions: np.ndarray,
-                          all_probabilities: Optional[np.ndarray] = None) -> Dict[str, Any]:
-        metrics: Dict[str, Any] = {}
-        metrics['accuracy'] = accuracy_score(true_labels, all_predictions)
-        metrics['precision'] = precision_score(
-            true_labels, all_predictions, average='macro', zero_division=0)
-        metrics['recall'] = recall_score(
-            true_labels, all_predictions, average='macro', zero_division=0)
-        metrics['f1'] = f1_score(
-            true_labels, all_predictions, average='macro', zero_division=0)
-
-        metrics['precision_micro'] = precision_score(
-            true_labels, all_predictions, average='micro', zero_division=0)
-        metrics['precision_weighted'] = precision_score(
-            true_labels, all_predictions, average='weighted', zero_division=0)
-        metrics['recall_micro'] = recall_score(
-            true_labels, all_predictions, average='micro', zero_division=0)
-        metrics['recall_weighted'] = recall_score(
-            true_labels, all_predictions, average='weighted', zero_division=0)
-        metrics['f1_micro'] = f1_score(
-            true_labels, all_predictions, average='micro', zero_division=0)
-        metrics['f1_weighted'] = f1_score(
-            true_labels, all_predictions, average='weighted', zero_division=0)
-
-        metrics['specificity'] = Metrics.specificity_score(true_labels, all_predictions)
-        metrics['balanced_accuracy'] = balanced_accuracy_score(true_labels, all_predictions)
-        metrics['mcc'] = matthews_corrcoef(true_labels, all_predictions)
-        metrics['cohen_kappa'] = cohen_kappa_score(true_labels, all_predictions)
+    @classmethod
+    def calculate_metrics(cls, y_true, y_pred, y_prob):
+        metrics = {}
+        # Handle different array formats
+        y_true = np.array(y_true)
+        y_pred = np.array(y_pred)
+        y_prob = np.array(y_prob)
         
-        if all_probabilities is not None:
-            # Handle ROC AUC differently for binary vs multiclass
-            num_classes = all_probabilities.shape[1]
-            if num_classes == 2:
-                # For binary classification, use only the probability of the positive class (index 1)
-                metrics['roc_auc'] = roc_auc_score(
-                    true_labels, 
-                    all_probabilities[:, 1]  # Use only probabilities for positive class
-                )
-                
-                # For binary classification, also handle average precision differently
-                metrics['average_precision'] = average_precision_score(
-                    true_labels,
-                    all_probabilities[:, 1]  # Use only probabilities for positive class
-                )
+        # Basic classification metrics
+        metrics['precision'] = precision_score(y_true, y_pred, average='macro', zero_division=0)
+        metrics['recall'] = recall_score(y_true, y_pred, average='macro', zero_division=0)
+        metrics['f1'] = f1_score(y_true, y_pred, average='macro', zero_division=0)
+        
+        # Additional classification metrics
+        metrics['precision_micro'] = precision_score(y_true, y_pred, average='micro', zero_division=0)
+        metrics['precision_weighted'] = precision_score(y_true, y_pred, average='weighted', zero_division=0)
+        metrics['recall_micro'] = recall_score(y_true, y_pred, average='micro', zero_division=0)
+        metrics['recall_weighted'] = recall_score(y_true, y_pred, average='weighted', zero_division=0)
+        metrics['f1_micro'] = f1_score(y_true, y_pred, average='micro', zero_division=0)
+        metrics['f1_weighted'] = f1_score(y_true, y_pred, average='weighted', zero_division=0)
+        
+        # Calculate specificity, balanced accuracy, and other metrics
+        metrics['specificity'] = cls.specificity_score(y_true, y_pred)
+        metrics['balanced_accuracy'] = balanced_accuracy_score(y_true, y_pred)
+        metrics['mcc'] = matthews_corrcoef(y_true, y_pred)
+        metrics['cohen_kappa'] = cohen_kappa_score(y_true, y_pred)
+        
+        # Probability-based metrics with error handling
+        try:
+            metrics['roc_auc'] = roc_auc_score(y_true, y_prob, multi_class='ovr', average='macro')
+        except ValueError as e:
+            if "Only one class present in y_true" in str(e):
+                metrics['roc_auc'] = 0.0
             else:
-                # For multiclass, binarize labels and use all probabilities
-                true_labels_binarized = label_binarize(
-                    true_labels, classes=np.arange(num_classes))
-                metrics['roc_auc'] = roc_auc_score(
-                    true_labels_binarized, all_probabilities, 
-                    average='macro', multi_class='ovr'
-                )
+                raise
                 
-                # For multiclass, use binarized labels for average precision
-                metrics['average_precision'] = average_precision_score(
-                    true_labels_binarized, all_probabilities, average='macro'
-                )
-            
-            metrics['log_loss'] = log_loss(true_labels, all_probabilities)
-            
-            # Brier Score Loss (only for binary classification)
-            if all_probabilities.shape[1] == 2:
-                try:
-                    metrics['brier_score'] = brier_score_loss(
-                        true_labels, all_probabilities[:, 1])
-                except:
-                    metrics['brier_score'] = None
+        try:
+            metrics['average_precision'] = average_precision_score(y_true, y_prob, average='macro')
+        except ValueError as e:
+            if "Only one class present in y_true" in str(e):
+                metrics['average_precision'] = 0.0
             else:
-                metrics['brier_score'] = None
-                
-            # Expected calibration error
-            metrics['ece'] = Metrics.expected_calibration_error(
-                true_labels, all_predictions, all_probabilities)
-        else:
-            metrics['roc_auc'] = None
-            metrics['average_precision'] = None
-            metrics['log_loss'] = None
-            metrics['brier_score'] = None
-            metrics['ece'] = None
-
-        # Calculate confusion matrix and related metrics
-        cm = confusion_matrix(true_labels, all_predictions)
-        metrics['confusion_matrix'] = cm.tolist()  # For JSON serialization
+                raise
         
-        # TP, TN, FP, FN for each class
-        n_classes = len(np.unique(true_labels))
-        tp = []
-        tn = []
-        fp = []
-        fn = []
+        # Calculate log loss if applicable
+        try:
+            metrics['log_loss'] = log_loss(y_true, y_prob)
+        except ValueError:
+            # If there's an issue with log loss, set a high value to indicate poor performance
+            metrics['log_loss'] = 15.0  # Arbitrarily high value
         
-        for i in range(n_classes):
-            tp_i = cm[i, i]
-            fp_i = np.sum(cm[:, i]) - tp_i
-            fn_i = np.sum(cm[i, :]) - tp_i
-            tn_i = np.sum(cm) - tp_i - fp_i - fn_i
-            
-            tp.append(int(tp_i))
-            tn.append(int(tn_i))
-            fp.append(int(fp_i))
-            fn.append(int(fn_i))
+        # Calculate Brier score and expected calibration error if applicable
+        try:
+            cls_names = np.unique(y_true)
+            if len(cls_names) == 2:  # Binary classification
+                metrics['brier_score'] = brier_score_loss(y_true, y_prob[:, 1])
+            else:
+                # For multiclass, we take the mean of per-class Brier scores
+                brier_scores = []
+                for i, cls_name in enumerate(cls_names):
+                    binary_y_true = (y_true == cls_name).astype(int)
+                    binary_y_prob = y_prob[:, i]
+                    brier_scores.append(brier_score_loss(binary_y_true, binary_y_prob))
+                metrics['brier_score'] = np.mean(brier_scores)
+        except (ValueError, IndexError):
+            metrics['brier_score'] = 1.0  # Worst possible Brier score
         
-        metrics['tp'] = tp
-        metrics['tn'] = tn
-        metrics['fp'] = fp
-        metrics['fn'] = fn
-
+        # Expected Calibration Error
+        try:
+            metrics['ece'] = cls.expected_calibration_error(y_true, y_pred, y_prob)
+        except:
+            metrics['ece'] = 1.0  # Worst possible ECE
+        
         return metrics

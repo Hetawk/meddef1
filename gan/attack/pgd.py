@@ -41,3 +41,24 @@ class PGDAttack:
             perturbed_images.requires_grad = True  # Ensure gradients are calculated in the next iteration
 
         return images.detach(), perturbed_images.detach(), labels.detach()
+        
+    def generate(self, images, labels, epsilon=None):
+        """Generate adversarial examples with optional epsilon override"""
+        try:
+            # Save original epsilon if we're overriding it
+            if epsilon is not None:
+                original_epsilon = self.epsilon
+                self.epsilon = epsilon
+                
+            # Call attack and return only the adversarial samples
+            _, perturbed_images, _ = self.attack(images, labels)
+            
+            # Restore original epsilon if it was overridden
+            if epsilon is not None:
+                self.epsilon = original_epsilon
+                
+            return perturbed_images
+            
+        except Exception as e:
+            logging.error(f"Error in PGD generate: {str(e)}", exc_info=True)
+            return images  # Return original images if attack fails
