@@ -2,254 +2,475 @@
 
 import os
 import argparse
-import logging
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
-from torchvision import transforms
+import torchvision.transforms as transforms
+from torchvision.utils import save_image
 
-# Import our multiprocessing fix utility
-from utils.torch_utils import fix_multiprocessing_issues
-
-# Apply the fix at the beginning before importing other modules that might use multiprocessing
-fix_multiprocessing_issues()
-
-from loader.dataset_loader import DatasetLoader
 from model.model_loader import ModelLoader
-from gan.defense.prune import Pruner
-from gan.attack.attack_loader import AttackHandler
-from utils.visual.saliency_maps import SaliencyMapGenerator, compare_pruned_saliency
+from loader.dataset_loader import DatasetLoader
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+def parse_args():
+    parser = argparse.ArgumentParser(description='Generate saliency maps for a model')
+    parser.add_argument('--data', type=str, required=True, help='Dataset name')
+    parser.add_argument('--arch', type=str, required=True, help='Model architecture')
+    parser.add_argument('--depth', type=float, required=True, help='Model depth/variant')
+    parser.add_argument('--model_path', type=str, required=True, help='Path to the model checkpoint')
+    parser.add_argument('--image_paths', nargs='+', help='Paths to the images for saliency map generation')
+    parser.add_argument('--output_dir', type=str, default='out/saliency_maps', help='Output directory for saliency maps')
+    parser.add_argument('--gpu-ids', nargs='+', type=int, default=[0], help='GPU IDs to use')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size (default: 32)')
+    parser.add_argument('--num_workers', type=int, default=4, help='Number of workers (default: 4)')
+    parser.add_argument('--pin_memory', action='store_true', help='Use pin_memory')
+    parser.add_argument('--combine', action='store_true', help='Combine multiple images into a single output')
+    return parser.parse_args()
 
-
-def load_image(image_path, normalize=True, image_size=(224, 224)):
-    """Load and preprocess an image"""
-    transform_list = [
-        transforms.Resize(image_size),
-        transforms.ToTensor(),
-    ]
-    
-    if normalize:
-        transform_list.append(
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225]
-            )
+class SaliencyMapGenerator:
+    def __init__(self, args):
+        self.args = args
+        self.device = torch.device(f"cuda:{args.gpu_ids[0]}" if torch.cuda.is_available() and args.gpu_ids else "cpu")
+        
+        # Load dataset to get number of classes
+        self.dataset_loader = DatasetLoader()
+        _, _, test_loader = self.dataset_loader.load_data(
+            dataset_name=args.data,
+            batch_size={
+                'train': args.batch_size,
+                'val': args.batch_size,
+                'test': args.batch_size
+            },
+            num_workers=args.num_workers,
+            pin_memory=args.pin_memory if hasattr(args, 'pin_memory') else False
         )
         
-    transform = transforms.Compose(transform_list)
-    
-    # Load image
-    image = Image.open(image_path).convert('RGB')
-    image_tensor = transform(image)
-    
-    return image_tensor
-
-
-def load_model(args, device):
-    """Load model with specified architecture and depth"""
-    # Load dataset to get number of classes
-    dataset_loader = DatasetLoader()
-    _, _, test_loader = dataset_loader.load_data(
-        dataset_name=args.data,
-        batch_size={
-            'train': 1,
-            'val': 1,
-            'test': 1
-        }
-    )
-    
-    # Get number of classes
-    dataset = test_loader.dataset
-    if hasattr(dataset, 'classes'):
-        num_classes = len(dataset.classes)
-    elif hasattr(dataset, 'class_to_idx'):
-        num_classes = len(dataset.class_to_idx)
-    else:
-        raise AttributeError("Dataset does not contain class information")
+        # Get number of classes
+        dataset = test_loader.dataset
+        if hasattr(dataset, 'classes'):
+            self.num_classes = len(dataset.classes)
+        elif hasattr(dataset, 'class_to_idx'):
+            self.num_classes = len(dataset.class_to_idx)
+        else:
+            raise AttributeError("Dataset does not contain class information")
+            
+        # Get the preprocessing transform from the dataset if available
+        if hasattr(dataset, 'transform'):
+            self.transform = dataset.transform
+        else:
+            # Fallback to standard normalization transform
+            self.transform = transforms.Compose([
+                transforms.Resize(224),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
         
-    # Load model architecture
-    model_loader = ModelLoader(device, args.arch, pretrained=False)
-    models_and_names = model_loader.get_model(
-        model_name=args.arch,
-        depth=float(args.depth),
-        input_channels=3,
-        num_classes=num_classes
-    )
-    
-    if not models_and_names:
-        logging.error("No models returned from model loader")
-        return None
+        # Get the class names if available
+        if hasattr(dataset, 'classes'):
+            self.class_names = dataset.classes
+        elif hasattr(dataset, 'class_to_idx'):
+            self.class_names = list(dataset.class_to_idx.keys())
+        else:
+            self.class_names = [str(i) for i in range(self.num_classes)]
         
-    model, _ = models_and_names[0]
-    model = model.to(device)
+        # Load model
+        self.model_loader = ModelLoader(self.device, args.arch, pretrained=False)
+        self.model = self.load_model()
+        
+        # Create output directory
+        self.output_dir = os.path.join(args.output_dir, args.data, f"{args.arch}_{args.depth}")
+        os.makedirs(self.output_dir, exist_ok=True)
     
-    # Load weights if specified
-    if args.model_path:
-        if os.path.exists(args.model_path):
-            checkpoint = torch.load(args.model_path, map_location=device)
+    def load_model(self):
+        # Get the model from the model loader
+        models_and_names = self.model_loader.get_model(
+            model_name=self.args.arch,
+            depth=float(self.args.depth),
+            input_channels=3,
+            num_classes=self.num_classes
+        )
+        
+        if not models_and_names:
+            raise ValueError("No models returned from model loader")
+        
+        model, _ = models_and_names[0]
+        model = model.to(self.device)
+        
+        # Load weights
+        if os.path.exists(self.args.model_path):
+            checkpoint = torch.load(self.args.model_path, map_location=self.device)
             if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
                 model.load_state_dict(checkpoint['state_dict'])
             else:
                 model.load_state_dict(checkpoint)
-            logging.info(f"Loaded model from {args.model_path}")
+            print(f"Loaded model from {self.args.model_path}")
         else:
-            logging.error(f"Model path {args.model_path} does not exist")
-            return None
-            
-    model.eval()
-    return model
-
-
-def generate_saliency_maps(args):
-    # Set device
-    device = torch.device(f"cuda:{args.gpu_ids[0]}" if torch.cuda.is_available() and args.gpu_ids else "cpu")
+            raise FileNotFoundError(f"Model path {self.args.model_path} does not exist")
+        
+        model.eval()
+        return model
     
-    # Load model
-    model = load_model(args, device)
-    if model is None:
-        return
+    def preprocess_image(self, image_path):
+        """Preprocess the image for model input"""
+        # Load the image and save original
+        original_image = Image.open(image_path).convert('RGB')
         
-    # Load image
-    image_tensor = load_image(args.image_path)
+        # Apply transformations for model input
+        input_tensor = self.transform(original_image).unsqueeze(0).to(self.device)
+        return input_tensor, original_image
     
-    # Output directory
-    output_dir = os.path.join(
-        "out",
-        "saliency_maps",
-        args.data,
-        f"{args.arch}_{args.depth}"
-    )
-    os.makedirs(output_dir, exist_ok=True)
+    def compute_vanilla_saliency(self, input_tensor, target_class=None):
+        """Compute vanilla gradient saliency map"""
+        # Enable gradient calculation for input
+        input_tensor.requires_grad_(True)
+        
+        # Forward pass
+        output = self.model(input_tensor)
+        
+        # If target class is not provided, use the predicted class
+        if target_class is None:
+            target_class = torch.argmax(output, dim=1)
+        
+        # Zero gradients
+        self.model.zero_grad()
+        
+        # Backward pass for the target class
+        one_hot = torch.zeros_like(output)
+        one_hot[0, target_class] = 1
+        output.backward(gradient=one_hot)
+        
+        # Get gradient with respect to input
+        gradients = input_tensor.grad.data
+        
+        # Calculate saliency map (absolute value of gradients)
+        saliency_map = torch.abs(gradients)
+        saliency_map = torch.max(saliency_map, dim=1)[0].unsqueeze(1)
+        
+        # Normalize saliency map for visualization
+        saliency_map = (saliency_map - saliency_map.min()) / (saliency_map.max() - saliency_map.min() + 1e-8)
+        
+        return saliency_map
     
-    # Initialize saliency map generator
-    saliency_generator = SaliencyMapGenerator(device)
-    
-    # Generate different types of saliency maps for original image
-    for method in args.methods:
-        logging.info(f"Generating {method} saliency map...")
-        if method == 'vanilla':
-            saliency_map = saliency_generator.generate_vanilla_saliency(model, image_tensor)
-        elif method == 'guided':
-            saliency_map = saliency_generator.generate_guided_backprop(model, image_tensor)
-        elif method == 'integrated':
-            saliency_map = saliency_generator.generate_integrated_gradients(model, image_tensor)
-        else:
-            logging.warning(f"Unknown saliency method: {method}")
-            continue
-            
-        # Save visualization
-        save_path = os.path.join(output_dir, f"saliency_{method}_clean.png")
-        saliency_generator.visualize_saliency(
-            image_tensor, 
-            saliency_map, 
-            save_path=save_path,
-            title=f"{args.arch}_{args.depth} - {method.title()} Saliency Map"
-        )
-        
-    # Generate adversarial example and its saliency map if requested
-    if args.generate_adversarial:
-        logging.info(f"Generating adversarial example using {args.attack_type}...")
-        attack_config = argparse.Namespace(
-            attack_type=args.attack_type,
-            attack_eps=args.attack_eps,
-            attack_alpha=args.attack_eps/10,
-            attack_steps=20
-        )
-        
-        attack_handler = AttackHandler(model, args.attack_type, attack_config)
-        batch_results = attack_handler.generate_adversarial_samples_batch(
-            image_tensor.unsqueeze(0).to(device),
-            torch.tensor([0]).to(device)  # Dummy target
-        )
-        
-        adv_image = batch_results['adversarial'][0]
-        
-        for method in args.methods:
-            logging.info(f"Generating {method} saliency map for adversarial example...")
-            if method == 'vanilla':
-                adv_saliency_map = saliency_generator.generate_vanilla_saliency(model, adv_image)
-            elif method == 'guided':
-                adv_saliency_map = saliency_generator.generate_guided_backprop(model, adv_image)
-            elif method == 'integrated':
-                adv_saliency_map = saliency_generator.generate_integrated_gradients(model, adv_image)
+    def compute_gradcam(self, input_tensor, target_layer_name=None, target_class=None):
+        """Compute Grad-CAM saliency map"""
+        # Set architecture-specific target layers if not specified
+        if target_layer_name is None:
+            if 'densenet' in self.args.arch.lower():
+                # For DenseNet models, use the final dense block or transition layer
+                target_layer_name = 'features.norm5'  # Final normalization layer after the last dense block
+            elif 'resnet' in self.args.arch.lower():
+                target_layer_name = 'layer4'  # For ResNet models
+            elif 'vgg' in self.args.arch.lower():
+                target_layer_name = 'features.42'  # For VGG19 (adjust as needed)
             else:
+                target_layer_name = 'layer4'  # Default fallback
+        
+        # Find the target layer
+        target_layer = None
+        for name, module in self.model.named_modules():
+            if target_layer_name in name:
+                target_layer = module
+                print(f"Found target layer: {name}")
+                break
+        
+        # If target layer not found, try architecture-specific fallbacks
+        if target_layer is None:
+            if 'densenet' in self.args.arch.lower():
+                # For DenseNet, find the last convolutional layer in the last dense block
+                for name, module in self.model.named_modules():
+                    if 'denseblock4' in name and isinstance(module, torch.nn.Conv2d):
+                        target_layer = module
+                        print(f"Using DenseNet fallback layer: {name}")
+                
+                # If still not found, try the transition layer
+                if target_layer is None:
+                    for name, module in self.model.named_modules():
+                        if 'transition3' in name and isinstance(module, torch.nn.Conv2d):
+                            target_layer = module
+                            print(f"Using DenseNet transition layer: {name}")
+                            
+            # Add other architecture-specific fallbacks as needed
+            # ...
+        
+        # Final fallback: use the last convolutional layer in the model
+        if target_layer is None:
+            print("Could not find specified target layer. Using the last convolutional layer as fallback.")
+            for name, module in self.model.named_modules():
+                if isinstance(module, torch.nn.Conv2d):
+                    target_layer = module
+                    last_conv_name = name
+            
+            if target_layer:
+                print(f"Using last convolutional layer: {last_conv_name}")
+            else:
+                raise ValueError("No convolutional layer found in the model.")
+        
+        # Hook for forward and backward
+        activations = None
+        gradients = None
+        
+        def save_activation(module, input, output):
+            nonlocal activations
+            activations = output.detach()
+        
+        def save_gradient(module, grad_input, grad_output):
+            nonlocal gradients
+            gradients = grad_output[0].detach()
+        
+        # Register hooks
+        forward_handle = target_layer.register_forward_hook(save_activation)
+        backward_handle = target_layer.register_full_backward_hook(save_gradient)
+        
+        # Forward pass
+        output = self.model(input_tensor)
+        
+        # If target class is not provided, use the predicted class
+        if target_class is None:
+            target_class = torch.argmax(output, dim=1).item()
+        
+        # Zero gradients
+        self.model.zero_grad()
+        
+        # Backward pass for the target class
+        one_hot = torch.zeros_like(output)
+        one_hot[0, target_class] = 1
+        output.backward(gradient=one_hot)
+        
+        # Remove hooks
+        forward_handle.remove()
+        backward_handle.remove()
+        
+        # Calculate weights based on global average pooling of gradients
+        weights = torch.mean(gradients, dim=(2, 3), keepdim=True)
+        
+        # Create weighted activation map
+        cam = torch.sum(weights * activations, dim=1, keepdim=True)
+        
+        # Apply ReLU and normalize
+        cam = torch.nn.functional.relu(cam)
+        cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+        
+        # Upsample to input size
+        cam = torch.nn.functional.interpolate(
+            cam, 
+            size=input_tensor.shape[2:],
+            mode='bilinear', 
+            align_corners=False
+        )
+        
+        return cam
+    
+    def process_multiple_images(self, image_paths, save_prefix="saliency"):
+        """Process multiple images and visualize their saliency maps in a grid"""
+        if not image_paths or len(image_paths) == 0:
+            print("No image paths provided")
+            return
+        
+        # Limit to max 3 images if we have more
+        if (len(image_paths) > 3):
+            print(f"Warning: Only the first 3 images will be processed (out of {len(image_paths)} provided)")
+            image_paths = image_paths[:3]
+            
+        # Process each image and collect results
+        results = []
+        for img_path in image_paths:
+            # Check if image exists
+            if not os.path.exists(img_path):
+                print(f"Warning: Image path does not exist: {img_path}")
                 continue
                 
-            # Save visualization
-            save_path = os.path.join(output_dir, f"saliency_{method}_adversarial_{args.attack_type}.png")
-            saliency_generator.visualize_saliency(
-                adv_image, 
-                adv_saliency_map, 
-                save_path=save_path,
-                title=f"{args.arch}_{args.depth} - {method.title()} Saliency Map (Adversarial: {args.attack_type})"
-            )
-            
-    # Generate and compare saliency maps at different pruning rates
-    if args.compare_pruning:
-        logging.info("Comparing saliency maps at different pruning rates...")
+            try:
+                # Preprocess the image
+                input_tensor, original_image = self.preprocess_image(img_path)
+                
+                # Get original image as numpy array
+                original_np = np.array(original_image)
+                
+                # Get prediction
+                with torch.no_grad():
+                    output = self.model(input_tensor)
+                    probabilities = torch.nn.functional.softmax(output, dim=1)
+                    predicted_class = torch.argmax(output, dim=1).item()
+                    predicted_prob = probabilities[0, predicted_class].item()
+                
+                # Get class name
+                class_name = self.class_names[predicted_class] if predicted_class < len(self.class_names) else f"Class {predicted_class}"
+                print(f"Image: {os.path.basename(img_path)} - Predicted class: {class_name} with probability {predicted_prob:.4f}")
+                
+                # Get saliency maps
+                vanilla_saliency = self.compute_vanilla_saliency(input_tensor).cpu().squeeze().numpy()
+                gradcam = self.compute_gradcam(input_tensor).cpu().squeeze().numpy()
+                
+                # Store results
+                results.append({
+                    'image_path': img_path,
+                    'original_image': original_np,
+                    'vanilla_saliency': vanilla_saliency,
+                    'gradcam': gradcam,
+                    'class_name': class_name,
+                    'probability': predicted_prob
+                })
+                
+                # Save individual results as before
+                self.save_individual_image_results(
+                    img_path, original_np, vanilla_saliency, gradcam,
+                    class_name, predicted_prob, save_prefix
+                )
+                
+            except Exception as e:
+                print(f"Error processing image {img_path}: {str(e)}")
         
-        # Set pruning rates to compare
-        pruning_rates = args.prune_rates or [0.0, 0.3, 0.5, 0.7, 0.9]
-        
-        for method in args.methods:
-            compare_pruned_saliency(
-                base_model=model,
-                pruning_rates=pruning_rates,
-                image=image_tensor,
-                device=device,
-                method=method,
-                save_dir=output_dir,
-                model_name=f"{args.arch}_{args.depth}",
-                dataset_name=args.data
-            )
+        # Generate combined visualization if we have results
+        if results and len(results) > 1:
+            self.generate_combined_visualization(results, save_prefix)
     
-    logging.info(f"Saliency maps generated and saved to {output_dir}")
+    def save_individual_image_results(self, image_path, original, vanilla_saliency, gradcam, 
+                                      class_name, probability, save_prefix):
+        """Save individual saliency map results for a single image"""
+        image_name = os.path.basename(image_path).split('.')[0]
+        
+        # Create the figure with subplots for visualization
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        
+        # Display original image
+        axes[0].imshow(original)
+        axes[0].set_title(f"Original: {class_name} ({probability:.2f})")
+        axes[0].axis('off')
+        
+        # Display vanilla saliency map
+        axes[1].imshow(vanilla_saliency, cmap='hot')
+        axes[1].set_title("Vanilla Gradient")
+        axes[1].axis('off')
+        
+        # Display Grad-CAM
+        axes[2].imshow(original)
+        axes[2].imshow(gradcam, cmap='jet', alpha=0.5)  # Overlay with transparency
+        axes[2].set_title("Grad-CAM")
+        axes[2].axis('off')
+        
+        # Save the figure
+        save_path = os.path.join(self.output_dir, f"{save_prefix}_{image_name}.png")
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        
+        # Also save the individual components for further analysis
+        # Save original image separately
+        plt.figure(figsize=(5, 5))
+        plt.imshow(original)
+        plt.axis('off')
+        plt.savefig(os.path.join(self.output_dir, f"{save_prefix}_{image_name}_original.png"), 
+                   dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Save vanilla saliency separately
+        plt.figure(figsize=(5, 5))
+        plt.imshow(vanilla_saliency, cmap='hot')
+        plt.axis('off')
+        plt.savefig(os.path.join(self.output_dir, f"{save_prefix}_{image_name}_vanilla.png"), 
+                   dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Save Grad-CAM separately
+        plt.figure(figsize=(5, 5))
+        plt.imshow(original)
+        plt.imshow(gradcam, cmap='jet', alpha=0.5)
+        plt.axis('off')
+        plt.savefig(os.path.join(self.output_dir, f"{save_prefix}_{image_name}_gradcam.png"), 
+                   dpi=300, bbox_inches='tight')
+        plt.close()
+        
+    def generate_combined_visualization(self, results, save_prefix):
+        """Generate a compact combined visualization for multiple images with minimal spacing"""
+        # Create figure with grid of subplots
+        n_images = len(results)
+        
+        # Use a more compact figure size with less width
+        fig = plt.figure(figsize=(10, 2.5 * n_images))
+        
+        # Use GridSpec for more precise control of spacing
+        gs = fig.add_gridspec(n_images, 3, 
+                              wspace=0.0,     # Horizontal spacing between columns
+                          hspace=0.03,    # Reduced from 0.03 to 0.01 for tighter vertical spacing
+                          left=0.11,      
+                          right=0.98,     
+                          top=0.92,       # Increased from 0.88 to 0.95 to reduce top margin
+                          bottom=0.02     # Reduced from 0.05 to 0.02 to reduce bottom margin
+                              )
+        
+        axes = np.empty((n_images, 3), dtype=object)
+        
+        # Create each subplot with GridSpec
+        for i in range(n_images):
+            for j in range(3):
+                axes[i, j] = fig.add_subplot(gs[i, j])
+        
+        # Set column titles only at the top row - smaller font and less padding
+        axes[0, 0].set_title("Original", fontsize=10, pad=2)
+        axes[0, 1].set_title("Vanilla Gradient", fontsize=10, pad=2)
+        axes[0, 2].set_title("Grad-CAM", fontsize=10, pad=2)
+        
+        # Add each image and its saliency maps to the grid
+        for i, result in enumerate(results):
+            # Create class info text
+            class_info = f"{result['class_name']} ({result['probability']:.2f})"
+            
+            # Original image (first column)
+            axes[i, 0].imshow(result['original_image'])
+            axes[i, 0].axis('off')
+            
+            # Add class info as vertical text on the left edge
+            axes[i, 0].text(-0.15, 0.5, class_info, 
+                            transform=axes[i, 0].transAxes,
+                            fontsize=9, ha='right', va='center',
+                            rotation=90)
+            
+            # Vanilla saliency (second column)
+            axes[i, 1].imshow(result['vanilla_saliency'], cmap='hot')
+            axes[i, 1].axis('off')
+            
+            # Grad-CAM (third column)
+            axes[i, 2].imshow(result['original_image'])
+            axes[i, 2].imshow(result['gradcam'], cmap='jet', alpha=0.5)
+            axes[i, 2].axis('off')
+        
+        # Add dataset and model information as a smaller super title
+        plt.suptitle(f"Dataset: {self.args.data}, Model: {self.args.arch}_{self.args.depth}", 
+                    fontsize=12, y=0.98)
+        
+        # Save the figure with tight layout to minimize whitespace
+        save_path = os.path.join(self.output_dir, f"{save_prefix}_combined.png")
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        
+        print(f"Combined visualization saved to {save_path}")
+
+    def visualize_saliency(self, image_path, save_prefix="saliency"):
+        """Process a single image (maintains backward compatibility)"""
+        # Just create a list with one image and use the multiple image function
+        self.process_multiple_images([image_path], save_prefix)
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Generate saliency maps for model interpretability')
+    args = parse_args()
+    generator = SaliencyMapGenerator(args)
     
-    # Model parameters
-    parser.add_argument('--data', type=str, required=True, help='Dataset name')
-    parser.add_argument('--arch', type=str, required=True, help='Model architecture')
-    parser.add_argument('--depth', type=float, required=True, help='Model depth/variant')
-    parser.add_argument('--model_path', type=str, help='Path to the model checkpoint')
-    
-    # Image parameters
-    parser.add_argument('--image_path', type=str, required=True, 
-                        help='Path to image for saliency analysis')
-    
-    # Saliency parameters
-    parser.add_argument('--methods', nargs='+', default=['vanilla', 'guided', 'integrated'],
-                        help='Saliency methods to use (vanilla, guided, integrated)')
-    
-    # Adversarial parameters
-    parser.add_argument('--generate_adversarial', action='store_true',
-                        help='Generate saliency maps for adversarial examples')
-    parser.add_argument('--attack_type', type=str, default='fgsm',
-                        help='Attack type (fgsm, pgd, bim)')
-    parser.add_argument('--attack_eps', type=float, default=0.1,
-                        help='Attack epsilon/strength parameter')
-    
-    # Pruning parameters
-    parser.add_argument('--compare_pruning', action='store_true',
-                        help='Compare saliency maps at different pruning rates')
-    parser.add_argument('--prune_rates', nargs='+', type=float,
-                        help='Pruning rates to compare')
-    
-    # Other parameters
-    parser.add_argument('--gpu-ids', nargs='+', type=int, default=[0],
-                        help='GPU IDs to use')
-    
-    args = parser.parse_args()
-    generate_saliency_maps(args)
+    if hasattr(args, 'image_paths') and args.image_paths:
+        # Process multiple images
+        generator.process_multiple_images(args.image_paths)
+    elif hasattr(args, 'image_path') and args.image_path:
+        # Process single image (backward compatibility)
+        generator.visualize_saliency(args.image_path)
+    else:
+        print("No images provided. Please specify images using --image_paths")
+        
+        # Example usage instruction
+        print("\nExample usage:")
+        print("python generate_saliency_maps.py --data rotc --arch densenet --depth 121 \\")
+        print("  --model_path \"out/normal_training/rotc/densenet_121/adv/save_model/best_densenet_121_rotc_epochs100_lr0.0001_batch32_20250228.pth\" \\")
+        print("  --image_paths \"processed_data/rotc/test/NORMAL/NORMAL-9251-1.jpeg\" \"processed_data/rotc/test/NORMAL/NORMAL-9251-2.jpeg\" \"processed_data/rotc/test/ABNORMAL/ABNORMAL-1234.jpeg\"")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

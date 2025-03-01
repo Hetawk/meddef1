@@ -13,6 +13,9 @@ python test.py --data rotc --arch densenet --depth 121 --model_path "out/normal_
 python test.py --data rotc --arch meddef1_ --depth 1.0 --model_path "out/normal_training/rotc/meddef1__1.0/save_model/best_meddef1__1.0_rotc_epochs100_lr0.001_batch64_20250226.pth" --image_path "out/normal_training/rotc/meddef1__1.0/attack/fgsm/sample_1_adv.png"
 
 
+### MedDef
+python test.py --data rotc --arch meddef1_ --depth 1.0 --model_path "out/normal_training/rotc/meddef1__1.0/adv/save_model/best_meddef1__1.0_rotc_epochs100_lr0.0001_batch32_20250228.pth" --image_path "out/normal_training/rotc/meddef1__1.0/attack/fgsm/sample_1_adv.png"
+
 ### Adversarial Training normal image
 #### ROTC
 python test.py --data rotc --arch meddef1_ --depth 1.0 --model_path "out/normal_training/rotc/meddef1__1.0/adv/save_model/best_meddef1__1.0_rotc_epochs100_lr0.0001_batch256_20250225.pth" --image_path "out/normal_training/rotc/meddef1__1.0/attack/fgsm/sample_1_orig.png"

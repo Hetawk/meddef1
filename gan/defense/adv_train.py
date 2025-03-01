@@ -14,6 +14,7 @@ class AdversarialTraining:
         self.model = model
         self.criterion = criterion
         self.config = config
+        self.device = next(model.parameters()).device
 
         # Ensure attack_name and epsilon are set from config
         if not hasattr(config, 'attack_name'):
@@ -24,6 +25,13 @@ class AdversarialTraining:
         # Initialize the attack using AttackLoader
         self.attack_loader = AttackLoader(model, config)
         self.attack = self.attack_loader.get_attack(config.attack_name)
+        
+        # Log the attack type(s) being used
+        if isinstance(config.attack_name, list):
+            logging.info(f"Setting up adversarial training with attacks: {', '.join(config.attack_name)}")
+        else:
+            logging.info(f"Setting up adversarial training with attack: {config.attack_name}")
+
         if self.attack is None:
             raise ValueError(
                 f"Failed to initialize attack {config.attack_name} for adversarial training")
@@ -177,13 +185,19 @@ class AdversarialTraining:
         try:
             # Determine folder structure similar to Trainer.save_model
             task = getattr(self.config, 'task_name', 'default_task')
+            
+            # Handle dataset name properly - convert list to string if needed
             if hasattr(self.config, 'data_key'):
                 dataset = self.config.data_key
             elif hasattr(self.config, 'data'):
-                dataset = self.config.data[0] if isinstance(
-                    self.config.data, list) else self.config.data
+                if isinstance(self.config.data, list):
+                    dataset = self.config.data[0]  # Take first dataset if it's a list
+                else:
+                    dataset = self.config.data
             else:
                 dataset = 'default_dataset'
+                
+            # Handle model name
             if hasattr(self.config, 'model_name'):
                 model_name = self.config.model_name
             elif hasattr(self.config, 'arch') and hasattr(self.config, 'depth'):
@@ -199,10 +213,18 @@ class AdversarialTraining:
                 model_name = f"{arch}_{depth_val}" if depth_val is not None else self.model.__class__.__name__
             else:
                 model_name = self.model.__class__.__name__
-            attack = self.config.attack_name
+                
+            # Handle attack name - convert list to string if needed
+            if isinstance(self.config.attack_name, list):
+                attack = "+".join(self.config.attack_name)  # Join attack names with +
+            else:
+                attack = self.config.attack_name
+                
             folder = os.path.join("out", task, dataset,
-                                  model_name, "attack", attack)
+                                model_name, "attack", attack)
             os.makedirs(folder, exist_ok=True)
+            
+            # The rest of the method remains the same
             num_samples = min(5, adv_data.size(0))
             for i in range(num_samples):
                 orig_filename = os.path.join(folder, f"sample_{i}_orig.png")
@@ -213,6 +235,7 @@ class AdversarialTraining:
                 save_image(adv_data[i], adv_filename)
                 perturbation = adv_data[i] - orig[i]
                 save_image(perturbation, pert_filename)
+                
             perturbation_tensor = adv_data[:num_samples] - orig[:num_samples]
             perturbations = perturbation_tensor.view(num_samples, -1)
             avg_norm = torch.norm(perturbations, p=2, dim=1).mean().item()

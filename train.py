@@ -103,9 +103,10 @@ def parse_args():
     # Add adversarial training arguments
     parser.add_argument('--adversarial', action='store_true',
                         help='Enable adversarial training')
-    parser.add_argument('--attack_type', type=str, default='fgsm',
+    parser.add_argument('--attack_type', type=str, nargs='+', 
+                        default=['fgsm'],
                         choices=['fgsm', 'pgd', 'bim', 'jsma'],
-                        help='Type of attack for adversarial training')
+                        help='Type(s) of attack for adversarial training. Can specify multiple attacks.')
     parser.add_argument('--attack_eps', type=float, default=0.3,
                         help='Epsilon for adversarial attacks')
     parser.add_argument('--attack_alpha', type=float, default=0.01,

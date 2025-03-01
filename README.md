@@ -91,7 +91,14 @@ python main.py --data ccts --arch meddef1_ --depth '{"meddef1_": [1.0, 1.1, 1.2]
 python main.py --data ccts --arch meddef1_ --depth '{"meddef1_": [1.0, 1.1, 1.2]}' --train_batch 32 --epochs 2 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 0 --task_name normal_training --optimizer adam --scheduler StepLR
 
 
-test
+python main.py --data rotc --arch meddef1_ --depth '{"meddef1_": [1.2]}' --train_batch 64 --epochs 100 --lr 0.0001 --drop 0.3 --weight_decay 0.0001 --num_workers 4 --pin_memory --gpu-ids 0 --task_name normal_training --optimizer adam --attack_eps 0.2 --adv_weight 0.3 --attack_type pgd
+
+## 
+
+python main.py --data rotc --arch resnext --depth '{"resnext": [50]}' --train_batch 64 --epochs 2 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 0 --task_name normal_training --optimizer adam
+
+
+### test
 
 python test.py --data rotc --arch meddef1_ --depth 1.0 --model_path "out/normal_training/rotc/meddef1__1.0/save_model/best_meddef1__1.0_rotc_epochs100_lr0.001_batch32_20250221.pth" --image_path "processed_data/rotc/test/NORMAL/NORMAL-9251-1.jpeg"
 
@@ -181,6 +188,13 @@ python generate_saliency_maps.py --data chest_xray --arch meddef1_ --depth 1.0 -
 
 python generate_saliency_maps.py --data rotc --arch densenet --depth 121 --model_path "out/normal_training/rotc/densenet_121/adv/save_model/best_densenet_121_rotc_epochs100_lr0.0001_batch32_20250228.pth"  --image_path "out/normal_training/rotc/densenet_121/attack/fgsm/sample_0_adv.png"
 
+
+
+python generate_saliency_maps.py --data rotc --arch densenet --depth 121 --model_path "out/normal_training/rotc/densenet_121/adv/save_model/best_densenet_121_rotc_epochs100_lr0.0001_batch32_20250228.pth" --image_path "out/normal_training/rotc/densenet_121/attack/fgsm/sample_0_adv.png"
+
+
+
+python generate_saliency_maps.py --data rotc --arch densenet --depth 121 --model_path "out/normal_training/rotc/densenet_121/adv/save_model/best_densenet_121_rotc_epochs100_lr0.0001_batch32_20250228.pth" --image_paths "out/normal_training/rotc/densenet_121/attack/fgsm/sample_0_orig.png" "out/normal_training/rotc/densenet_121/attack/fgsm/sample_2_orig.png" "out/normal_training/rotc/densenet_121/attack/fgsm/sample_2_orig.png"
 ```
 ## Contributing
 

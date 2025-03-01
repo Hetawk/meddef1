@@ -57,28 +57,32 @@ class Evaluator:
             logging.info(f"{key}: {value}")
 
     def save_metrics(self, metrics: dict, dataset_name: str):
-        metrics_df = pd.DataFrame([{
+        # Create a dictionary with default values for all expected metrics
+        metrics_data = {
             'Model': self.model_name,
-            'Accuracy': metrics['accuracy'],
-            'Precision': metrics['precision'],
-            'Precision Micro': metrics['precision_micro'],
-            'Precision Weighted': metrics['precision_weighted'],
-            'Recall': metrics['recall'],
-            'Recall Micro': metrics['recall_micro'],
-            'Recall Weighted': metrics['recall_weighted'],
-            'F1 Score': metrics['f1'],
-            'F1 Micro': metrics['f1_micro'],
-            'F1 Weighted': metrics['f1_weighted'],
-            'Specificity': metrics['specificity'],
-            'Balanced Accuracy': metrics['balanced_accuracy'],
-            'MCC': metrics['mcc'],
-            'ROC AUC': metrics['roc_auc'],
-            'Average Precision': metrics['average_precision'],
-            'TP': metrics['tp'],
-            'TN': metrics['tn'],
-            'FP': metrics['fp'],
-            'FN': metrics['fn']
-        }])
+            'Accuracy': metrics.get('accuracy', 0.0),
+            'Precision': metrics.get('precision', 0.0),
+            'Precision Micro': metrics.get('precision_micro', 0.0),
+            'Precision Weighted': metrics.get('precision_weighted', 0.0),
+            'Recall': metrics.get('recall', 0.0),
+            'Recall Micro': metrics.get('recall_micro', 0.0),
+            'Recall Weighted': metrics.get('recall_weighted', 0.0),
+            'F1 Score': metrics.get('f1', 0.0),
+            'F1 Micro': metrics.get('f1_micro', 0.0),
+            'F1 Weighted': metrics.get('f1_weighted', 0.0),
+            'Specificity': metrics.get('specificity', 0.0),
+            'Balanced Accuracy': metrics.get('balanced_accuracy', 0.0),
+            'MCC': metrics.get('mcc', 0.0),
+            'ROC AUC': metrics.get('roc_auc', 0.0),
+            'Average Precision': metrics.get('average_precision', 0.0),
+            'TP': metrics.get('tp', 0),
+            'TN': metrics.get('tn', 0),
+            'FP': metrics.get('fp', 0),
+            'FN': metrics.get('fn', 0)
+        }
+        
+        metrics_df = pd.DataFrame([metrics_data])
+        
         metrics_csv_path = os.path.join('out', self.task_name, dataset_name, self.model_name, f"all_evaluation_metrics.csv")
         os.makedirs(os.path.dirname(metrics_csv_path), exist_ok=True)
 

@@ -43,6 +43,9 @@ class Metrics:
         y_pred = np.array(y_pred)
         y_prob = np.array(y_prob)
         
+        # Add accuracy metric
+        metrics['accuracy'] = accuracy_score(y_true, y_pred)
+        
         # Basic classification metrics
         metrics['precision'] = precision_score(y_true, y_pred, average='macro', zero_division=0)
         metrics['recall'] = recall_score(y_true, y_pred, average='macro', zero_division=0)
@@ -55,6 +58,30 @@ class Metrics:
         metrics['recall_weighted'] = recall_score(y_true, y_pred, average='weighted', zero_division=0)
         metrics['f1_micro'] = f1_score(y_true, y_pred, average='micro', zero_division=0)
         metrics['f1_weighted'] = f1_score(y_true, y_pred, average='weighted', zero_division=0)
+        
+        # Calculate confusion matrix components
+        cm = confusion_matrix(y_true, y_pred)
+        if cm.shape[0] == 2:  # Binary classification
+            # For binary classification, we can directly extract TP, TN, FP, FN
+            tn, fp, fn, tp = cm.ravel()
+            metrics['tp'] = int(tp)
+            metrics['tn'] = int(tn)
+            metrics['fp'] = int(fp)
+            metrics['fn'] = int(fn)
+        else:  # Multi-class classification
+            # For multi-class, calculate macro-averaged TP, TN, FP, FN
+            tp, tn, fp, fn = 0, 0, 0, 0
+            n_classes = cm.shape[0]
+            for i in range(n_classes):
+                tp += cm[i, i]  # Elements on the diagonal are TP for each class
+                fn += np.sum(cm[i, :]) - cm[i, i]  # Row sum - TP = FN
+                fp += np.sum(cm[:, i]) - cm[i, i]  # Column sum - TP = FP
+                tn += np.sum(cm) - np.sum(cm[i, :]) - np.sum(cm[:, i]) + cm[i, i]  # All - Row sum - Column sum + TP = TN
+            
+            metrics['tp'] = int(tp)
+            metrics['tn'] = int(tn)
+            metrics['fp'] = int(fp)
+            metrics['fn'] = int(fn)
         
         # Calculate specificity, balanced accuracy, and other metrics
         metrics['specificity'] = cls.specificity_score(y_true, y_pred)
