@@ -4,7 +4,7 @@ import os
 import argparse
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt # type: ignore
 from PIL import Image
 import torchvision.transforms as transforms
 from torchvision.utils import save_image

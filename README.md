@@ -195,6 +195,9 @@ python generate_saliency_maps.py --data rotc --arch densenet --depth 121 --model
 
 
 python generate_saliency_maps.py --data rotc --arch densenet --depth 121 --model_path "out/normal_training/rotc/densenet_121/adv/save_model/best_densenet_121_rotc_epochs100_lr0.0001_batch32_20250228.pth" --image_paths "out/normal_training/rotc/densenet_121/attack/fgsm/sample_0_orig.png" "out/normal_training/rotc/densenet_121/attack/fgsm/sample_2_orig.png" "out/normal_training/rotc/densenet_121/attack/fgsm/sample_2_orig.png"
+
+
+python -m loader.saliency_generator --data rotc --arch densenet --depth 121 --model_path "out/normal_training/rotc/densenet_121/adv/save_model/best_densenet_121_rotc_epochs100_lr0.0001_batch32_20250228.pth" --image_paths "out/normal_training/rotc/densenet_121/attack/fgsm/sample_0_orig.png" "out/normal_training/rotc/densenet_121/attack/fgsm/sample_3_orig.png" "out/normal_training/rotc/densenet_121/attack/fgsm/sample_4_orig.png"
 ```
 ## Contributing
 
