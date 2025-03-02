@@ -5,6 +5,7 @@ import argparse
 import logging
 import numpy as np
 import pandas as pd
+from sklearn.metrics import f1_score, precision_score, recall_score
 import torch
 import matplotlib.pyplot as plt
 from tqdm import tqdm
@@ -80,10 +81,39 @@ class AttackEvaluator:
         self.results = []
     
     def count_parameters(self, model):
-        """Count the total and non-zero parameters in a model"""
-        total_params = sum(p.numel() for p in model.parameters())
-        # Count non-zero params (for pruned models)
-        nonzero_params = sum(torch.count_nonzero(p).item() for p in model.parameters())
+        """
+        Count the total and non-zero parameters in a model.
+        For pruned models, this counts actual non-zero weights correctly.
+        """
+        total_params = 0
+        nonzero_params = 0
+        
+        # Collect pruned parameter statistics
+        for name, module in model.named_modules():
+            if hasattr(module, 'weight_mask') and module.weight_mask is not None:
+                # This is a pruned module
+                weight = module.weight
+                mask = module.weight_mask
+                param_total = weight.numel()
+                nonzero_count = torch.sum(mask).item()
+                
+                total_params += param_total
+                nonzero_params += nonzero_count
+                logging.info(f"Pruned module {name}: {nonzero_count}/{param_total} non-zero weights "
+                            f"({nonzero_count/param_total*100:.2f}%)")
+        
+        # If we didn't find any pruned layers, do a normal parameter count
+        if total_params == 0:
+            for name, param in model.named_parameters():
+                if param.requires_grad:
+                    param_total = param.numel()
+                    total_params += param_total
+                    nonzero_count = torch.count_nonzero(param).item()
+                    nonzero_params += nonzero_count
+            
+            logging.info(f"No pruning masks found. Total parameters: {total_params}, "
+                        f"Non-zero parameters: {nonzero_params}")
+        
         return total_params, nonzero_params
     
     def load_model(self, model_path):
@@ -177,6 +207,10 @@ class AttackEvaluator:
         all_adv_preds = []
         all_adv_probs = []
         
+        # Track numbers for better ASR calculation
+        successful_attacks = 0
+        valid_attacks = 0
+        
         # Get all possible class indices from the dataset
         # This helps ensure we handle all classes correctly even if they're not in the current evaluation batch
         if hasattr(self.test_loader.dataset, 'classes'):
@@ -220,6 +254,19 @@ class AttackEvaluator:
             all_targets.append(target.cpu())
             all_adv_probs.append(adv_probs.cpu())
             
+            # Count for ASR calculation:
+            # For each sample, if originally correct and now wrong after attack, it's a successful attack
+            correct_before = clean_predicted == target
+            correct_after = adv_predicted == target
+            
+            # Successful attack = was correct before, wrong after
+            batch_successful = torch.logical_and(correct_before, torch.logical_not(correct_after)).sum().item()
+            # Valid attack = was correct before (can only attack correct predictions)
+            batch_valid = correct_before.sum().item()
+            
+            successful_attacks += batch_successful
+            valid_attacks += batch_valid
+            
             total += target.size(0)
             correct += (adv_predicted == target).sum().item()
             
@@ -256,9 +303,27 @@ class AttackEvaluator:
         
         adv_metrics['accuracy'] = correct / total
         
-        # Calculate attack success rate
-        attack_success_rate = compute_adv_success_rate(all_targets, all_preds, all_adv_preds)
+        # Calculate corrected attack success rate
+        if valid_attacks > 0:
+            # ASR = (number of successfully attacked samples) / (number of correctly classified samples before attack)
+            attack_success_rate = 100.0 * successful_attacks / valid_attacks
+        else:
+            # If no valid attacks (no samples correctly classified before attack),
+            # then attack success rate is technically undefined/0
+            attack_success_rate = 0.0
+            
         adv_metrics['attack_success_rate'] = attack_success_rate
+        
+        # Also add original attack success calculation for comparison
+        original_asr = compute_adv_success_rate(all_targets, all_preds, all_adv_preds)
+        adv_metrics['original_attack_success_rate'] = original_asr
+        
+        logging.info(f"Attack success metrics for {attack_type}:")
+        logging.info(f"  - Total samples: {total}")
+        logging.info(f"  - Correct before attack: {valid_attacks}")
+        logging.info(f"  - Successful attacks (correct→incorrect): {successful_attacks}")
+        logging.info(f"  - Improved ASR: {attack_success_rate:.2f}%")
+        logging.info(f"  - Original ASR calculation: {original_asr:.2f}%")
         
         return adv_metrics, all_targets, all_adv_preds, all_adv_probs
 
@@ -312,6 +377,9 @@ class AttackEvaluator:
             'attack_type': 'none',
             'accuracy': clean_metrics['accuracy'],
             'attack_success_rate': 0.0,
+            'total_params': total_params,
+            'nonzero_params': nonzero_params,
+            'params_ratio': nonzero_params/total_params*100,
             **{k: v for k, v in clean_metrics.items() if k not in ['confusion_matrix', 'tp', 'tn', 'fp', 'fn']}
         })
         
@@ -412,6 +480,9 @@ class AttackEvaluator:
                 'attack_type': attack_type,
                 'accuracy': adv_metrics['accuracy'],
                 'attack_success_rate': adv_metrics['attack_success_rate'],
+                'total_params': total_params,
+                'nonzero_params': nonzero_params,
+                'params_ratio': nonzero_params/total_params*100,
                 **{k: v for k, v in adv_metrics.items() if k not in ['confusion_matrix', 'tp', 'tn', 'fp', 'fn']}
             })
         
@@ -438,6 +509,9 @@ class AttackEvaluator:
                 'attack_type': 'none',
                 'accuracy': pruned_clean_metrics['accuracy'],
                 'attack_success_rate': 0.0,
+                'total_params': total_params,
+                'nonzero_params': nonzero_params,
+                'params_ratio': nonzero_params/total_params*100,
                 **{k: v for k, v in pruned_clean_metrics.items() if k not in ['confusion_matrix', 'tp', 'tn', 'fp', 'fn']}
             })
             
@@ -466,6 +540,9 @@ class AttackEvaluator:
                     'attack_type': attack_type,
                     'accuracy': pruned_adv_metrics['accuracy'],
                     'attack_success_rate': pruned_adv_metrics['attack_success_rate'],
+                    'total_params': total_params,
+                    'nonzero_params': nonzero_params,
+                    'params_ratio': nonzero_params/total_params*100,
                     **{k: v for k, v in pruned_adv_metrics.items() if k not in ['confusion_matrix', 'tp', 'tn', 'fp', 'fn']}
                 })
             
@@ -487,6 +564,9 @@ class AttackEvaluator:
         csv_path = os.path.join(self.output_dir, "attack_evaluation_results.csv")
         df.to_csv(csv_path, index=False)
         logging.info(f"Saved results to {csv_path}")
+        
+        # Generate parameter plots
+        self.generate_parameter_plots()
         
         # Generate plots
         self.generate_plots()
@@ -591,15 +671,29 @@ class AttackEvaluator:
             f.write(f"Date: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("\n")
             
+            # Model parameter summary
+            f.write("=== Model Parameter Summary ===\n")
+            param_data = df.drop_duplicates(['model_type', 'prune_rate'])[['model_type', 'prune_rate', 'total_params', 'nonzero_params', 'params_ratio']]
+            for _, row in param_data.sort_values(['model_type', 'prune_rate']).iterrows():
+                model_type = "Original" if row['model_type'] == 'original' else "Pruned"
+                f.write(f"{model_type} (Prune Rate {row['prune_rate']:.1f}): "
+                        f"Total params: {row['total_params']/1e6:.2f}M, "
+                        f"Non-zero: {row['nonzero_params']/1e6:.2f}M "
+                        f"({row['params_ratio']:.2f}%)\n")
+            
+            f.write("\n")
+            
             # Clean Accuracy Summary
             f.write("=== Clean Accuracy Summary ===\n")
             clean_data = df[df['attack_type'] == 'none']
             for _, row in clean_data.iterrows():
-                f.write(f"Prune Rate {row['prune_rate']:.1f}: Accuracy = {row['accuracy']:.4f}\n")
+                f.write(f"Prune Rate {row['prune_rate']:.1f}: "
+                        f"Accuracy = {row['accuracy']:.4f}, "
+                        f"Params = {row['nonzero_params']/1e6:.2f}M ({row['params_ratio']:.2f}%)\n")
             
             f.write("\n")
             
-            # Attack Success Rate Summary
+            # Attack Success Rate Summary with clarification
             f.write("=== Attack Success Rate Summary ===\n")
             for attack_type in sorted(df['attack_type'].unique()):
                 if attack_type == 'none':
@@ -608,7 +702,21 @@ class AttackEvaluator:
                 f.write(f"\n{attack_type.upper()} Attack:\n")
                 attack_data = df[df['attack_type'] == attack_type]
                 for _, row in attack_data.iterrows():
-                    f.write(f"  Prune Rate {row['prune_rate']:.1f}: ASR = {row['attack_success_rate']:.2f}%, Accuracy = {row['accuracy']:.4f}\n")
+                    model_acc = df[(df['attack_type'] == 'none') & (df['prune_rate'] == row['prune_rate'])]['accuracy'].values[0]
+                    attack_acc = row['accuracy']
+                    asr = row['attack_success_rate']
+                    
+                    # Add a note if the ASR might be misleading
+                    asr_note = ""
+                    if model_acc <= 0.3 and asr == 0.0:
+                        asr_note = " (Note: Low baseline accuracy may affect ASR)"
+                    elif abs(model_acc - attack_acc) < 0.01 and asr == 0.0:
+                        asr_note = " (Attack ineffective, model accuracy unchanged)"
+                    
+                    f.write(f"  Prune Rate {row['prune_rate']:.1f}: "
+                            f"ASR = {row['attack_success_rate']:.2f}%{asr_note}, "
+                            f"Accuracy = {row['accuracy']:.4f}, "
+                            f"Params = {row['nonzero_params']/1e6:.2f}M ({row['params_ratio']:.2f}%)\n")
             
             f.write("\n")
             
@@ -623,7 +731,9 @@ class AttackEvaluator:
                 max_robust_row = attack_data.loc[max_robust_idx]
                 
                 f.write(f"{attack_type.upper()}: Prune Rate {max_robust_row['prune_rate']:.1f} " +
-                       f"(ASR = {max_robust_row['attack_success_rate']:.2f}%, Accuracy = {max_robust_row['accuracy']:.4f})\n")
+                       f"(ASR = {max_robust_row['attack_success_rate']:.2f}%, " +
+                       f"Accuracy = {max_robust_row['accuracy']:.4f}, " +
+                       f"Params = {max_robust_row['nonzero_params']/1e6:.2f}M ({max_robust_row['params_ratio']:.2f}%))\n")
             
             f.write("\n")
             
@@ -642,16 +752,21 @@ class AttackEvaluator:
                 
                 for _, row in attack_data.iterrows():
                     prune_rate = row['prune_rate']
-                    clean_acc = clean_data.loc[clean_data['prune_rate'] == prune_rate, 'accuracy'].values[0]
+                    clean_row = clean_data.loc[clean_data['prune_rate'] == prune_rate].iloc[0]
+                    clean_acc = clean_row['accuracy'] 
                     robustness = 1 - row['attack_success_rate']/100
                     trade_off_score = clean_acc * robustness
+                    nonzero_params = row['nonzero_params']
+                    params_ratio = row['params_ratio']
                     
                     tradeoff_data.append({
                         'attack_type': attack_type,
                         'prune_rate': prune_rate,
                         'clean_acc': clean_acc,
                         'robustness': robustness * 100,  # Convert back to percentage
-                        'trade_off_score': trade_off_score
+                        'trade_off_score': trade_off_score,
+                        'nonzero_params': nonzero_params,
+                        'params_ratio': params_ratio
                     })
             
             tradeoff_df = pd.DataFrame(tradeoff_data)
@@ -661,7 +776,9 @@ class AttackEvaluator:
                 best_row = attack_data.loc[best_idx]
                 
                 f.write(f"{attack_type.upper()}: Best trade-off at Prune Rate {best_row['prune_rate']:.1f} " +
-                       f"(Clean Acc = {best_row['clean_acc']:.4f}, Robustness = {best_row['robustness']:.2f}%)\n")
+                       f"(Clean Acc = {best_row['clean_acc']:.4f}, " +
+                       f"Robustness = {best_row['robustness']:.2f}%, " +
+                       f"Params = {best_row['nonzero_params']/1e6:.2f}M ({best_row['params_ratio']:.2f}%))\n")
             
             f.write("\n")
             
@@ -675,12 +792,121 @@ class AttackEvaluator:
                 f.write(f"Best overall pruning rate: {best_overall['prune_rate']:.1f} " +
                        f"(against {best_overall['attack_type'].upper()} attack)\n")
                 f.write(f"This provides a clean accuracy of {best_overall['clean_acc']:.4f} " +
-                       f"with robustness of {best_overall['robustness']:.2f}%\n")
+                       f"with robustness of {best_overall['robustness']:.2f}% " +
+                       f"using {best_overall['nonzero_params']/1e6:.2f}M parameters ({best_overall['params_ratio']:.2f}% of original)\n")
             else:
                 f.write("Not enough data to provide recommendations.\n")
         
         logging.info(f"Generated summary at {summary_path}")
         return summary_path
+
+    # Add a new method to generate parameter visualization
+    def generate_parameter_plots(self):
+        """Generate parameter-related visualization plots"""
+        df = pd.DataFrame(self.results)
+        
+        # Get unique combinations of model_type and prune_rate
+        param_data = df.drop_duplicates(['model_type', 'prune_rate'])[['model_type', 'prune_rate', 
+                                                                 'total_params', 'nonzero_params', 'params_ratio']]
+        
+        # Sort by prune rate
+        param_data = param_data.sort_values('prune_rate')
+        
+        # Plot: Parameter count vs prune rate - Convert to numpy arrays first to avoid pandas indexing issues
+        plt.figure(figsize=(10, 6))
+        prune_rates = param_data['prune_rate'].to_numpy()
+        nonzero_params = param_data['nonzero_params'].to_numpy() / 1e6
+        total_params = param_data['total_params'].to_numpy() / 1e6
+        
+        plt.plot(prune_rates, nonzero_params, 'o-', 
+                color='blue', label='Non-zero parameters (M)')
+        plt.plot(prune_rates, total_params, '--', 
+                color='gray', label='Total parameters (M)')
+        plt.xlabel('Pruning Rate')
+        plt.ylabel('Parameters (millions)')
+        plt.title('Model Size vs Pruning Rate')
+        plt.grid(True)
+        plt.legend()
+        plt.savefig(os.path.join(self.output_dir, 'parameters_vs_pruning.png'))
+        plt.close()
+        
+        # Add a parameter efficiency plot - Convert to numpy arrays first
+        plt.figure(figsize=(10, 6))
+        
+        clean_data = df[df['attack_type'] == 'none'].copy()
+        clean_data['acc_per_param'] = clean_data['accuracy'] / (clean_data['nonzero_params']/1e6)
+        
+        prune_rates = clean_data['prune_rate'].to_numpy()
+        acc_per_param = clean_data['acc_per_param'].to_numpy()
+        
+        plt.plot(prune_rates, acc_per_param, 'o-', 
+                color='green', label='Accuracy per million parameters')
+        plt.xlabel('Pruning Rate')
+        plt.ylabel('Clean Accuracy per Million Parameters')
+        plt.title('Parameter Efficiency vs Pruning Rate')
+        plt.grid(True)
+        plt.savefig(os.path.join(self.output_dir, 'parameter_efficiency.png'))
+        plt.close()
+        
+        # Plot: 3D visualization of accuracy, robustness, and parameter count
+        attack_types = [at for at in df['attack_type'].unique() if at != 'none']
+        
+        if attack_types:  # If we have attack data
+            try:
+                # Choose first attack for visualization
+                attack_type = attack_types[0]
+                
+                fig = plt.figure(figsize=(12, 10))
+                ax = fig.add_subplot(111, projection='3d')
+                
+                attack_data = df[df['attack_type'] == attack_type]
+                clean_data = df[df['attack_type'] == 'none']
+                
+                # Prepare data points - Convert all to numpy arrays
+                prune_rates = attack_data['prune_rate'].values
+                # Match clean data to attack data by prune rate
+                accuracies = []
+                for pr in prune_rates:
+                    matching_clean = clean_data[clean_data['prune_rate'] == pr]
+                    if not matching_clean.empty:
+                        accuracies.append(matching_clean['accuracy'].values[0])
+                    else:
+                        accuracies.append(np.nan)  # Handle missing data
+                
+                accuracies = np.array(accuracies)
+                robustness = 100 - attack_data['attack_success_rate'].values
+                param_ratios = attack_data['params_ratio'].values
+                
+                # Remove any NaN values
+                valid_indices = ~np.isnan(accuracies)
+                if np.any(valid_indices):
+                    prune_rates = prune_rates[valid_indices]
+                    accuracies = accuracies[valid_indices]
+                    robustness = robustness[valid_indices]
+                    param_ratios = param_ratios[valid_indices]
+                    
+                    # Create scatter plot
+                    scatter = ax.scatter(accuracies, robustness, param_ratios,
+                                       c=param_ratios, cmap='viridis', s=100)
+                    
+                    # Add labels for points
+                    for i, rate in enumerate(prune_rates):
+                        ax.text(accuracies[i], robustness[i], param_ratios[i], 
+                               f"{rate:.1f}", fontsize=9)
+                    
+                    ax.set_xlabel('Clean Accuracy')
+                    ax.set_ylabel('Robustness (100 - ASR%)')
+                    ax.set_zlabel('Parameters Remaining (%)')
+                    ax.set_title(f'3D Trade-off: Accuracy, Robustness ({attack_type}), and Model Size')
+                    
+                    # Add color bar
+                    cbar = fig.colorbar(scatter, ax=ax, label='Parameters Remaining (%)')
+                    
+                    plt.savefig(os.path.join(self.output_dir, 'tradeoff_3d.png'))
+                plt.close()
+            except Exception as e:
+                logging.error(f"Error generating 3D plot: {e}")
+                # Continue with other plots even if 3D plot fails
 
 
 def parse_args():
