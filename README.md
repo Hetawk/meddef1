@@ -69,7 +69,7 @@ python main.py --data ccts --data_key ccts --task_name normal_training --epochs 
 ```
 
 ```bash
- python main.py --data ccts --data_key ccts --task_name normal_training --epochs 100 --train_batch 32 --test-batch 32 --lr 0.01 --min-lr 1e-7 --warmup-epochs 10 --lr-scheduler cosine --weight-decay 1e-6 --lambda_l2 0.00001 --drop 0.2 --gpu-ids 0 --arch meddef2_ --depth "{'meddef2_': [2.0, 2.1, 2.2, 2.3, 2.4]}" --adv_training --max-grad-norm 1.0 --accumulation_steps 4 --patience 15
+ python main.py --data ccts --data_key ccts --task_name normal_training --epochs 100 --train_batch 32 --test-batch 32 --lr 0.01 --min-lr 1e-7 --warmup-epochs 10 --lr-scheduler cosine --weight-decay 1e-6 --lambda_l2 0.0001 --drop 0.2 --gpu-ids 0 --arch meddef2_ --depth "{'meddef2_': [2.0, 2.1, 2.2, 2.3, 2.4]}" --adv_training --max-grad-norm 1.0 --accumulation_steps 4 --patience 15
 ```
 
 ```bash
@@ -113,7 +113,7 @@ python test.py --data ccts --arch meddef1_ --depth '{"meddef1_": [1.0]}' --test_
 
 Adversarial Traiing
 ```bash
-python main.py --data ccts --arch meddef1_ --depth '{"meddef1_": [1.0]}' --train_batch 32 --epochs 3 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 0 --task_name normal_training --optimizer adam --adversarial --attack_type fgsm
+python main.py --data chest_xray --arch meddef1 --depth '{"meddef1_": [1.0, 1.1, 1.2]}' --train_batch 32 --epochs 3 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 0 --task_name normal_training --optimizer adam --adversarial --attack_type fgsm
 
 
 python main.py --data ccts --arch meddef1_ --depth '{"meddef1_": [1.0, 1.1, 1.2]}' --train_batch 32 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 0 --task_name normal_training --optimizer adam --adversarial 
@@ -128,6 +128,8 @@ python main.py --data rotc --arch meddef1_ --depth '{"meddef1_": [1.0]}' --task_
 
 # Step 2: Train with pre-generated attacks
 python main.py --data rotc --arch meddef1_ --depth '{"meddef1_": [1.0]}' --train_batch 32 --epochs 5 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 0 --task_name normal_training --optimizer adam --adversarial --attack_type fgsm
+
+
 ```
 
 
@@ -137,7 +139,46 @@ python main.py --data rotc --arch meddef1_ --depth '{"meddef1_": [1.0]}' --train
 python test.py --data rotc --arch meddef1_ --depth 1.0 --model_path "out/normal_training/rotc/meddef1__1.0/adv/save_model/best_meddef1__1.0_rotc_epochs100_lr0.001_batch64_20250224.pth" --image_path "processed_data/rotc/test/NORMAL/NORMAL-9251-1.jpeg"
 
 ### test before prune -> adversarial image normal train
+## 1 | Confidence  1.0000
 python test.py --data rotc --arch meddef1_ --depth 1.0 --model_path "out/normal_training/rotc/b_meddef1__1.0/best_meddef1__1.0_rotc_epochs100_lr0.0001_batch32_20250301.pth" --image_path "out/normal_training/rotc/meddef1__1.0/attack/bim+jsma/sample_0_orig.png"
+## 2 | Confidence 0.9780
+python test.py --data rotc --arch resnet --depth 18 --model_path "out/normal_training/rotc/resnet_18/adv/save_model/best_resnet_18_rotc_epochs100_lr0.001_batch32_20250227.pth" --image_path "out/normal_training/rotc/resnet_18/attack/fgsm/sample_0_adv.png"
+## 3 | Confidence 0.9154
+python test.py --data rotc --arch densenet --depth 121 --model_path "out/normal_training/rotc/densenet_121/adv/save_model/best_densenet_121_rotc_epochs100_lr0.0001_batch32_20250228.pth" --image_path "out/normal_training/rotc/densenet_121/attack/fgsm/sample_0_adv.png"
+## 4 | Confidence 0.9999
+python test.py --data rotc --arch vgg --depth 16 --model_path "out/normal_training/rotc/vgg_16/adv/save_model/best_vgg_16_rotc_epochs100_lr0.001_batch64_20250224.pth" --image_path "out/normal_training/rotc/vgg_16/attack/fgsm/sample_0_adv.png"
+
+##### Chest Xray
+## 1 | Confidence  1.0000
+python test.py --data chest_xray --arch vgg --depth 16 --model_path "out/normal_training/chest_xray/vgg_16/adv/save_model/best_vgg_16_chest_xray_epochs100_lr0.0001_batch32_20250303.pth" --image_path "out/normal_training/chest_xray/vgg_16/attack/fgsm/sample_0_adv.png"
+
+## 2 | Confidence 
+python test.py --data chest_xray --arch resnet --depth 18 --model_path "out/normal_training/chest_xray/resnet_18/adv/save_model/best_resnet_18_chest_xray_epochs100_lr0.0005_batch32_20250227.pth" --image_path "out/normal_training/chest_xray/resnet_18/attack/fgsm/sample_0_adv.png"
+
+## 3 | Confidence
+python test.py --data chest_xray --arch densenet --depth 121 --model_path "out/normal_training/chest_xray/densenet_121/adv/save_model/best_densenet_121_chest_xray_epochs100_lr0.0001_batch32_20250303.pth" --image_path "out/normal_training/chest_xray/densenet_121/attack/fgsm/sample_0_adv.png"
+
+
+## 4 | Confidence 
+python test.py --data chest_xray --arch meddef1_ --depth 1.0 --model_path "out/normal_training/chest_xray/meddef1__1.0/adv/save_model/best_meddef1__1.0_chest_xray_epochs100_lr0.0001_batch32_20250303.pth" --image_path "out/normal_training/chest_xray/meddef1__1.0/attack/fgsm/sample_0_adv.png"
+
+```
+python main.py --data chest_xray --arch meddef1 --depth '{"meddef1": [1.0, 1.1,1.2]}' --train_batch 32 --epochs 100 --lr 0.0001 --drop 0.5 --num_workers 4 --pin_memory --gpu-ids 1 --task_name normal_training --optimizer adam --adversarial --attack_eps 0.2 --adv_weight 0.5 --attack_type fgsm bim jsma pgd
+
+
+python main.py --data chest_xray --arch vgg --depth '{"vgg": [16]}' --train_batch 32 --epochs 100 --lr 0.0001 --drop 0.5 --num_workers 4 --pin_memory --gpu-ids 1 --task_name normal_training --optimizer adam --adversarial --attack_eps 0.2 --adv_weight 0.5 --attack_type fgsm
+
+python main.py --data chest_xray --arch densenet --depth '{"densenet": [121]}' --train_batch 32 --epochs 100 --lr 0.0001 --drop 0.5 --num_workers 4 --pin_memory --gpu-ids 1 --task_name normal_training --optimizer adam --adversarial --attack_eps 0.2 --adv_weight 0.5 --attack_type fgsm
+
+python main.py --data chest_xray --arch resnet --depth '{"resnet": [18,34]}' --train_batch 32 --epochs 100 --lr 0.0001 --drop 0.5 --num_workers 4 --pin_memory --gpu-ids 1 --task_name normal_training --optimizer adam --adversarial --attack_eps 0.2 --adv_weight 0.5 --attack_type fgsm
+
+```bash
+
+Resnet18	11.18	86.57	88.33	86.57	86.29
+Densenet121	85.84	90.59	85.84	84.73     84.73
+MedDef1.0	21.84	99.27	99.29	99.27	99.27	
+VGG16       133.49  89.54  89.99   89.54  89.54
+Resnet34    21.29  91.59  90.99   91.59  91.59
 
 
 
