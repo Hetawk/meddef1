@@ -1,4 +1,42 @@
+<<<<<<< HEAD
 # Byte-compiled / optimized / DLL files
+=======
+
+code.txt
+Arch.md
+ref_help.txt
+code_base.txt
+meddef.rar
+torch-1.10.1+cu111-cp38-cp38-linux_x86_64.whl
+torchvision-0.10.0+cu111-cp38-cp38-linux_x86_64.whl
+
+dataset/
+loader/saliency/
+./processed_data/
+processed_data/
+oooooout/
+out/
+out_ref/
+philip/
+data/
+.idea
+meddef.zip
+# Ignore specific files and directories in the loader folder
+loader/updated_dataset_loader_for_config
+loader/updated_dataset_loader_for_config.txt
+loader/dataset_work.txt
+loader/backup_preprocess.py
+loader/dfdfdfd.txt
+
+# Ignore __pycache__ directories anywhere
+**/__pycache__/
+__pycache__/train.cpython-312.pyc
+
+# Ignore analysis figures directory inside loader/data_analysis
+loader/data_analysis/analysis_figures/
+# Byte-compiled / optimized / DLL files
+__pycache__
+>>>>>>> 9c762dfc530c4b960474568a87004c0d4481da5f
 __pycache__/
 *.py[cod]
 *$py.class
@@ -94,12 +132,15 @@ ipython_config.py
 #   install all needed dependencies.
 #Pipfile.lock
 
+<<<<<<< HEAD
 # UV
 #   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
 #   This is especially recommended for binary packages to ensure reproducibility, and is more
 #   commonly ignored for libraries.
 #uv.lock
 
+=======
+>>>>>>> 9c762dfc530c4b960474568a87004c0d4481da5f
 # poetry
 #   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
 #   This is especially recommended for binary packages to ensure reproducibility, and is more
@@ -130,6 +171,10 @@ celerybeat.pid
 # Environments
 .env
 .venv
+<<<<<<< HEAD
+=======
+
+>>>>>>> 9c762dfc530c4b960474568a87004c0d4481da5f
 env/
 venv/
 ENV/
@@ -166,6 +211,19 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+<<<<<<< HEAD
 
 # PyPI configuration file
 .pypirc
+=======
+.DS_Store
+data/
+loader/dataset_work.txt
+loader/dfdfdfd.txt
+loader/updated_dataset_loader_for_config.txt
+loader/updated_dataset_loader_for_configt
+loader/backup_preprocess.py
+loader/data_analysis/dataset_analysis_results.txt
+loader/data_analysis/dataset_analysis_results.csv
+loader/data_analysis/analysis_figures
+>>>>>>> 9c762dfc530c4b960474568a87004c0d4481da5f
