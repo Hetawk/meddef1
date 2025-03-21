@@ -1,12 +1,16 @@
-import utils.pandas_patch
-import logging
-import os
-import torch
-import torchvision
-import torch.multiprocessing as mp
-from utils.logger import setup_logger
+from argument_parser import parse_args
 from utils.task_handler import TaskHandler
-from train import parse_args  # Changed this line - import from train.py instead
+from utils.logger import setup_logger
+import torch.multiprocessing as mp
+import torchvision
+import torch
+import os
+import logging
+import utils.pandas_patch
+from utils.matplotlib_config import configure_matplotlib_backend
+
+# Configure matplotlib backend before any other imports that might use matplotlib
+configure_matplotlib_backend()
 
 
 def setup_environment(args):

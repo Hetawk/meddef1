@@ -26,6 +26,9 @@ To run the main script, use the following command:
 
 ```bash
 python main.py --data chest_xray --task_name normal_training --epochs 100 --train_batch 32 --test-batch 32 --lr 0.001 --drop 0.5 --gpu-ids 2 --arch resnet --depth '{"resnet": [18, 34]}' --pin_memory
+
+
+
 ```
 
 ### Command Line Arguments
@@ -62,7 +65,7 @@ python main.py --data chest_xray --task_name normal_training --epochs 100 --trai
 ```bash
 python dataset_processing.py --data ccts --output_dir processed_data
 
-python main.py --data ccts --arch meddef1 --depth '{"meddef1": [1.0, 1.1, 1.2]}' --train_batch 32 --epochs 100 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 0 --task_name normal_training --optimizer adam
+python main.py --data chest_xray --arch meddef1 --depth '{"meddef1": [1.0]}' --train_batch 32 --epochs 3 --lr 0.001 --drop 0.3 --num_workers 4 --pin_memory --gpu-ids 0 --task_name normal_training --optimizer adam
 
 
 
@@ -212,3 +215,56 @@ Contributions are welcome! Please feel free to submit a pull request or open an 
 This project is licensed under the MIT License. See the `LICENSE` file for more details.
 
 
+```bash
+python main.py --data chest_xray --arch meddef1 --depth '{"meddef1": [1.0]}' --train_batch 32 --epochs 100 --lr 0.001 --optimizer sgd --scheduler StepLR
+
+python main.py --data chest_xray --arch resnet --depth '{"resnet": [18]}' --train_batch 32 --epochs 100 --lr 0.001 --optimizer sgd --scheduler StepLR --patience 30
+
+python main.py --experiment_mode --enable optim --data chest_xray --arch resnet --depth '{"resnet": [18]}' --train_batch 32 --epochs 100 --lr 0.01 --optimizer sgd --scheduler CosineAnnealingLR --min_lr 1e-6 --patience 30
+
+python main.py --experiment_mode --enable optim reg --data chest_xray --arch resnet --depth '{"resnet": [18]}' --train_batch 32 --epochs 100 --lr 0.01 --optimizer sgd --scheduler CosineAnnealingWarmRestarts --cycle_length 20 --drop 0.3 --weight_decay 5e-5 --patience 30 --min_epochs 50
+
+python main.py --experiment_mode --enable optim reg --data chest_xray --arch resnet --depth '{"resnet": [18]}' --train_batch 32 --epochs 100 --lr 0.01 --optimizer sgd --scheduler StepLR --drop 0.3 --weight_decay 5e-5 --early_stopping_metric accuracy --patience 30
+
+```
+
+
+
+```bash
+# Standard cross-entropy (default)
+python main.py --data chest_xray --arch resnet --loss_type standard --drop 0.3 --weight_decay 1e-3
+
+# Automatic class weighting based on distribution
+python main.py --data chest_xray --arch resnet --loss_type weighted --drop 0.3 --weight_decay 1e-3
+
+# Aggressive weighting for severe imbalance
+python main.py --data chest_xray --arch resnet --loss_type aggressive  --drop 0.3 --weight_decay 1e-3
+
+# Dynamic weighting that focuses on harder examples over time
+python main.py --data chest_xray --arch resnet --loss_type dynamic --focal_alpha 0.5 --focal_gamma 2.0
+
+```
+
+```bash
+# Tensorboard
+
+tensorboard --logdir=runs
+
+
+```
+
+```bash
+python main.py --data chest_xray --task_name normal_training --epochs 100 --train_batch 16 --lr 0.0001 --drop 0.2 --gpu-ids 0 --arch transformer --depth '{"transformer": ["tiny"]}' --pin_memory --weight_decay 1e-4
+
+## Handle class imbalance
+python main.py --data chest_xray --task_name normal_training --loss_type weighted --use_weighted_sampler --epochs 100 --arch meddef1 --depth '{"meddef1": ["1.0"]}' --early_stopping_metric f1
+
+python main.py --data chest_xray --task_name normal_training --loss_type weighted --epochs 100 --train_batch 16 --lr 0.0001 --drop 0.2 --gpu-ids 0 --arch meddef1 --depth '{"meddef1": ["1.0"]}' --pin_memory --weight_decay 1e-4 --early_stopping_metric accuracy
+
+
+
+
+### Data preprocessing
+python dataset_processing.py --datasets chest_xray --enforce_split --train_split 0.8 --val_split 0.1 --test_split 0.1
+
+```

@@ -605,13 +605,18 @@ def analyze_dataset(dataset_name, data_dir):
 # Dataset Directories and Processing
 # --------------------------------------------------------------------
 dataset_dirs = {
-    'scisic_train': 'dataset/scisic/Train',
-    'ccts_train': 'dataset/ccts/train',
-    'rotc_train': 'dataset/rotc/train',
-    'kvasir_train': 'dataset/kvasir/train',
-    'chest_xray_train': 'dataset/chest_xray/train',
-    'tbcr_train': 'dataset/tbcr',
-    'miccai_brats2020': 'dataset/miccai_brats2020/MICCAI_BraTS2020_TrainingData',
+    # 'scisic_train': 'processed_data/scisic/Train',
+    # 'ccts_train': 'processed_data/ccts/train',
+    # 'rotc_train': 'processed_data/rotc/train',
+    # 'kvasir_train': 'processed_data/kvasir/train',
+    # 'chest_xray_train': 'processed_data/chest_xray/train',
+    # 'tbcr_train': 'processed_data/tbcr',
+    # 'miccai_brats2020': 'processed_data/miccai_brats2020/MICCAI_BraTS2020_TrainingData',
+    
+   
+    'rotc': 'processed_data/rotc/train',
+    'chest_xray': 'processed_data/chest_xray/train',
+
 }
 
 # Determine the project root (modify as needed)

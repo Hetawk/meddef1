@@ -1,9 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision.models as models
 import logging
+from typing import List, Optional, Union, Type
 from torchvision.models import mobilenet_v2, mobilenet_v3_small
+from model.attention.base_robust_method import BaseRobustMethod
 
 
 class ConvBNReLU(nn.Sequential):
@@ -42,8 +43,10 @@ class InvertedResidual(nn.Module):
 
 
 class MobileNetV2(nn.Module):
-    def __init__(self, num_classes, width_mult=1.0, inverted_residual_setting=None, round_nearest=8, input_channels=3):
+    def __init__(self, num_classes, width_mult=1.0, inverted_residual_setting=None,
+                 round_nearest=8, input_channels=3, robust_method=None):
         super(MobileNetV2, self).__init__()
+        self.robust_method = robust_method
         block = InvertedResidual
         input_channel = 32
         last_channel = 1280
@@ -80,6 +83,7 @@ class MobileNetV2(nn.Module):
 
         # make it nn.Sequential
         self.features = nn.Sequential(*features)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
         # building classifier
         self.classifier = nn.Sequential(
@@ -100,139 +104,219 @@ class MobileNetV2(nn.Module):
                 nn.init.normal_(m.weight, 0, 0.01)
                 nn.init.zeros_(m.bias)
 
-    def forward(self, x):
+    def forward_without_fc(self, x):
+        """Extract features before classification head"""
         x = self.features(x)
-        x = x.mean([2, 3])  # global average pooling
-        x = self.classifier(x)
+        x = self.avgpool(x)  # Returns 4D tensor [B, C, 1, 1]
         return x
 
+    def forward(self, x):
+        x = self.forward_without_fc(x)
+
+        if self.robust_method:
+            # Apply robust method if available
+            x, _ = self.robust_method(x, x, x)
+            return x  # Return 4D tensor for compatibility with attention modules
+        else:
+            # Standard forward path with classification
+            x = torch.flatten(x, 1)  # Flatten to [B, C]
+            x = self.classifier(x)
+            return x
+
     def load_pretrained_weights(self, input_channels):
-        if input_channels == 3:
+        """Load pretrained weights from torchvision model"""
+        if input_channels == 3:  # Only load if standard RGB input
+            logging.info("Loading pretrained MobileNetV2 weights")
             pretrained_model = mobilenet_v2(pretrained=True)
             model_dict = self.state_dict()
             pretrained_dict = {
-                k: v for k, v in pretrained_model.state_dict().items() if k in model_dict}
+                k: v for k, v in pretrained_model.state_dict().items()
+                if k in model_dict and 'classifier' not in k
+            }
             model_dict.update(pretrained_dict)
             self.load_state_dict(model_dict)
+            logging.info(
+                f"Loaded {len(pretrained_dict)}/{len(model_dict)} layers from pretrained model")
+        else:
+            logging.info(
+                f"Skipping pretrained weights: input has {input_channels} channels (not RGB)")
 
 
-def MobileNetV2Model(pretrained=False, input_channels=3, num_classes=None):
-    model = MobileNetV2(num_classes=num_classes, input_channels=input_channels)
-    if pretrained:
-        model.load_pretrained_weights(input_channels)
-    return model
-
+# MobileNetV3 implementation
 
 class hswish(nn.Module):
-    def __init__(self, inplace=True):
-        super(hswish, self).__init__()
-        self.relu = nn.ReLU6(inplace=inplace)
-
     def forward(self, x):
-        return x * self.relu(x + 3) / 6
+        return x * F.relu6(x + 3) / 6
 
 
 class hsigmoid(nn.Module):
-    def __init__(self, inplace=True):
-        super(hsigmoid, self).__init__()
-        self.relu = nn.ReLU6(inplace=inplace)
-
     def forward(self, x):
-        return self.relu(x + 3) / 6
+        return F.relu6(x + 3) / 6
 
 
-class SqueezeExcitation(nn.Module):
-    def __init__(self, inplanes, se_planes):
-        super(SqueezeExcitation, self).__init__()
-        self.reduce_expand = nn.Sequential(
-            nn.Conv2d(inplanes, se_planes, 1),
+class SEModule(nn.Module):
+    """Squeeze-and-Excitation module"""
+
+    def __init__(self, channel, reduction=4):
+        super(SEModule, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
             nn.ReLU(inplace=True),
-            nn.Conv2d(se_planes, inplanes, 1),
+            nn.Linear(channel // reduction, channel, bias=False),
             hsigmoid()
         )
 
     def forward(self, x):
-        x_se = torch.mean(x, dim=(-2, -1), keepdim=True)
-        return x * self.reduce_expand(x_se)
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
 
 
-class ConvBNActivation(nn.Sequential):
-    def __init__(self, in_planes, out_planes, kernel_size, stride, groups=1):
-        padding = (kernel_size - 1) // 2
-        super(ConvBNActivation, self).__init__(
-            nn.Conv2d(in_planes, out_planes, kernel_size, stride,
-                      padding, groups=groups, bias=False),
-            nn.BatchNorm2d(out_planes),
+class MobileNetV3Block(nn.Module):
+    """Mobile Inverted Residual Bottleneck Block for MobileNetV3"""
+
+    def __init__(self, inp, oup, hidden_dim, kernel_size, stride, use_se, use_hs):
+        super(MobileNetV3Block, self).__init__()
+        self.identity = stride == 1 and inp == oup
+
+        activation = hswish() if use_hs else nn.ReLU(inplace=True)
+
+        layers = []
+        # Expand
+        if hidden_dim != inp:
+            layers.extend([
+                nn.Conv2d(inp, hidden_dim, 1, 1, 0, bias=False),
+                nn.BatchNorm2d(hidden_dim),
+                activation
+            ])
+
+        # Depthwise
+        layers.extend([
+            nn.Conv2d(hidden_dim, hidden_dim, kernel_size, stride,
+                      (kernel_size - 1) // 2, groups=hidden_dim, bias=False),
+            nn.BatchNorm2d(hidden_dim),
+            activation
+        ])
+
+        # SE
+        if use_se:
+            layers.append(SEModule(hidden_dim))
+
+        # Project
+        layers.extend([
+            nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False),
+            nn.BatchNorm2d(oup)
+        ])
+
+        self.conv = nn.Sequential(*layers)
+
+    def forward(self, x):
+        if self.identity:
+            return x + self.conv(x)
+        else:
+            return self.conv(x)
+
+
+class MobileNetV3Small(nn.Module):
+    """MobileNetV3-Small implementation"""
+
+    def __init__(self, num_classes=1000, input_channels=3, robust_method=None):
+        super(MobileNetV3Small, self).__init__()
+        self.robust_method = robust_method
+
+        # Configuration for MobileNetV3-Small
+        # [in_channels, exp_size, out_channels, kernel_size, stride, use_SE, use_HS]
+        cfg = [
+            [16, 16, 16, 3, 2, True, False],     # 0
+            [16, 72, 24, 3, 2, False, False],    # 1
+            [24, 88, 24, 3, 1, False, False],    # 2
+            [24, 96, 40, 5, 2, True, True],      # 3
+            [40, 240, 40, 5, 1, True, True],     # 4
+            [40, 240, 40, 5, 1, True, True],     # 5
+            [40, 120, 48, 5, 1, True, True],     # 6
+            [48, 144, 48, 5, 1, True, True],     # 7
+            [48, 288, 96, 5, 2, True, True],     # 8
+            [96, 576, 96, 5, 1, True, True],     # 9
+            [96, 576, 96, 5, 1, True, True],     # 10
+        ]
+
+        # Initial convolution
+        self.features = nn.Sequential(
+            nn.Conv2d(input_channels, 16, 3, 2, 1, bias=False),
+            nn.BatchNorm2d(16),
             hswish()
         )
 
+        # Building blocks
+        for idx, (inp, exp, oup, kernel, stride, use_se, use_hs) in enumerate(cfg):
+            self.features.add_module(f'block{idx}',
+                                     MobileNetV3Block(inp, oup, exp, kernel, stride, use_se, use_hs))
 
-class InvertedResidualConfig:
-    def __init__(self, inplanes, outplanes, kernel_size, stride, expand_ratio, se_planes):
-        self.inplanes = inplanes
-        self.outplanes = outplanes
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.expand_ratio = expand_ratio
-        self.se_planes = se_planes
+        # Final layers
+        self.features.add_module('conv_last', nn.Sequential(
+            nn.Conv2d(96, 576, 1, 1, 0, bias=False),
+            nn.BatchNorm2d(576),
+            hswish()
+        ))
 
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-class MobileNetV3(nn.Module):
-    def __init__(self, num_classes, cfgs=None, input_channels=3):
-        super(MobileNetV3, self).__init__()
-        self.cfgs = cfgs
-        self.conv1 = ConvBNActivation(input_channels, 16, 3, 2)
-        self.layers = self._make_layers()
-        self.conv2 = ConvBNActivation(cfgs[-1].inplanes, 960, 1, 1)
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.linear = nn.Linear(960, num_classes)
+        self.classifier = nn.Sequential(
+            nn.Linear(576, 1280),
+            hswish(),
+            nn.Dropout(0.2),
+            nn.Linear(1280, num_classes)
+        )
 
-    def _make_layers(self):
-        layers = []
-        for cfg in self.cfgs:
-            layers.append(InvertedResidual(cfg))
-        return nn.Sequential(*layers)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.layers(x)
-        x = self.conv2(x)
-        x = self.pool(x)
-        x = x.view(x.size(0), -1)
-        x = self.linear(x)
+    def forward_without_fc(self, x):
+        """Extract features before classification head"""
+        x = self.features(x)
+        x = self.avgpool(x)  # Returns 4D tensor [B, C, 1, 1]
         return x
 
+    def forward(self, x):
+        x = self.forward_without_fc(x)
+
+        if self.robust_method:
+            # Apply robust method if available
+            x, _ = self.robust_method(x, x, x)
+            return x  # Return 4D tensor for compatibility with attention modules
+        else:
+            # Standard forward path with classification
+            x = torch.flatten(x, 1)  # Flatten to [B, C]
+            x = self.classifier(x)
+            return x
+
     def load_pretrained_weights(self, input_channels):
-        if input_channels == 3:
-            pretrained_model = mobilenet_v3_small(pretrained=True)
-            model_dict = self.state_dict()
-            pretrained_dict = {
-                k: v for k, v in pretrained_model.state_dict().items() if k in model_dict}
-            model_dict.update(pretrained_dict)
-            self.load_state_dict(model_dict)
+        """Load pretrained weights from torchvision model"""
+        if input_channels == 3:  # Only load if standard RGB input
+            try:
+                logging.info("Loading pretrained MobileNetV3-Small weights")
+                pretrained_model = mobilenet_v3_small(pretrained=True)
+                model_dict = self.state_dict()
 
+                # Filter out classifier weights
+                pretrained_dict = {
+                    k: v for k, v in pretrained_model.state_dict().items()
+                    if k in model_dict and 'classifier' not in k
+                }
 
-def MobileNetV3SmallModel(pretrained=False, input_channels=3, num_classes=None):
-    cfgs = [
-        InvertedResidualConfig(16, 16, 3, 2, 1, 4),
-        InvertedResidualConfig(16, 24, 3, 2, 2, 3),
-        InvertedResidualConfig(24, 24, 3, 1, 2.5, 3),
-        InvertedResidualConfig(24, 40, 5, 2, 2.5, 3),
-        InvertedResidualConfig(40, 40, 5, 1, 2.5, 3),
-        InvertedResidualConfig(40, 40, 5, 1, 2.5, 3),
-        InvertedResidualConfig(40, 48, 5, 1, 2.5, 3),
-        InvertedResidualConfig(48, 48, 5, 1, 2.5, 3),
-        InvertedResidualConfig(48, 96, 5, 2, 2.5, 3),
-        InvertedResidualConfig(96, 96, 5, 1, 2.5, 3),
-    ]
-    model = MobileNetV3(
-        cfgs=cfgs, input_channels=input_channels, num_classes=num_classes)
-    if pretrained:
-        model.load_pretrained_weights(input_channels)
-    return model
+                # Update model weights
+                model_dict.update(pretrained_dict)
+                self.load_state_dict(model_dict)
+                logging.info(
+                    f"Loaded {len(pretrained_dict)}/{len(model_dict)} layers from pretrained model")
+            except Exception as e:
+                logging.error(f"Failed to load pretrained weights: {str(e)}")
+        else:
+            logging.info(
+                f"Skipping pretrained weights: input has {input_channels} channels (not RGB)")
 
 
 def check_num_classes(func):
+    """Decorator to check if num_classes is provided"""
     def wrapper(*args, **kwargs):
         num_classes = kwargs.get('num_classes')
         if num_classes is None:
@@ -242,22 +326,42 @@ def check_num_classes(func):
 
 
 @check_num_classes
-def get_mobilenet(version: str, pretrained: bool = False, input_channels: int = 3, num_classes: int = None,
-                  robust_method=None):
+def get_mobilenet(version: str, pretrained: bool = False, input_channels: int = 3,
+                  num_classes: int = None, robust_method: Optional[BaseRobustMethod] = None):
     """
     Factory method to obtain a MobileNet model.
-    version: 'v2' or 'v3small'
-    robust_method: Optional robust method module.
+
+    Args:
+        version: 'v2' or 'v3small' - MobileNet version to use
+        pretrained: Whether to load pretrained weights
+        input_channels: Number of input image channels
+        num_classes: Number of classes for classification
+        robust_method: Optional robust method module
+
+    Returns:
+        MobileNet model with the specified configuration
     """
     version = version.lower()
     if version == 'v2':
-        model = MobileNetV2Model(
-            pretrained=pretrained, input_channels=input_channels, num_classes=num_classes)
+        model = MobileNetV2(
+            num_classes=num_classes,
+            input_channels=input_channels,
+            robust_method=robust_method
+        )
+        logging.info(f"Created MobileNetV2 model with {num_classes} classes")
     elif version == 'v3small':
-        model = MobileNetV3SmallModel(
-            pretrained=pretrained, input_channels=input_channels, num_classes=num_classes)
+        model = MobileNetV3Small(
+            num_classes=num_classes,
+            input_channels=input_channels,
+            robust_method=robust_method
+        )
+        logging.info(
+            f"Created MobileNetV3-Small model with {num_classes} classes")
     else:
-        raise ValueError(f"Unsupported MobileNet version: {version}")
-    if robust_method:
-        model.robust_method = robust_method
+        raise ValueError(
+            f"Unsupported MobileNet version: {version}. Use 'v2' or 'v3small'.")
+
+    if pretrained:
+        model.load_pretrained_weights(input_channels)
+
     return model

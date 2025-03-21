@@ -2,6 +2,7 @@
 
 import torch.optim.lr_scheduler as lr_scheduler
 import logging
+import math
 
 
 class LRSchedulerLoader:
@@ -10,6 +11,9 @@ class LRSchedulerLoader:
             'StepLR': lr_scheduler.StepLR,
             'ExponentialLR': lr_scheduler.ExponentialLR,
             'ReduceLROnPlateau': lr_scheduler.ReduceLROnPlateau,
+            'CosineAnnealingLR': lr_scheduler.CosineAnnealingLR,
+            'CosineAnnealingWarmRestarts': lr_scheduler.CosineAnnealingWarmRestarts,
+            'OneCycleLR': lr_scheduler.OneCycleLR,
         }
         logging.info(
             f"LRSchedulerLoader initialized with schedulers: {', '.join(self.schedulers.keys())}")
@@ -17,6 +21,11 @@ class LRSchedulerLoader:
     def get_scheduler(self, optimizer, args):
         # Get scheduler name from args or use default
         scheduler_name = getattr(args, 'scheduler', 'StepLR')
+
+        # Handle the case when scheduler is explicitly set to None
+        if scheduler_name == 'none' or scheduler_name is None:
+            logging.info("No scheduler will be used")
+            return None
 
         if scheduler_name not in self.schedulers:
             logging.warning(
@@ -44,4 +53,27 @@ class LRSchedulerLoader:
                 factor=getattr(args, 'lr_gamma', 0.1),
                 patience=getattr(args, 'lr_patience', 10),
                 verbose=True
+            )
+        elif scheduler_name == 'CosineAnnealingLR':
+            return scheduler_class(
+                optimizer,
+                T_max=getattr(args, 'epochs', 100),
+                eta_min=getattr(args, 'min_lr', 1e-6)
+            )
+        elif scheduler_name == 'CosineAnnealingWarmRestarts':
+            return scheduler_class(
+                optimizer,
+                T_0=getattr(args, 'cycle_length', 10),
+                T_mult=getattr(args, 'cycle_mult', 1),
+                eta_min=getattr(args, 'min_lr', 1e-6)
+            )
+        elif scheduler_name == 'OneCycleLR':
+            return scheduler_class(
+                optimizer,
+                max_lr=getattr(args, 'max_lr', args.lr * 10),
+                total_steps=getattr(args, 'epochs', 100) *
+                len(getattr(args, 'train_loader', 100)),
+                pct_start=getattr(args, 'pct_start', 0.3),
+                div_factor=getattr(args, 'div_factor', 25),
+                final_div_factor=getattr(args, 'final_div_factor', 10000)
             )

@@ -9,8 +9,9 @@ from model.backbone.resnet import get_resnet
 from model.backbone.resnext import get_resnext
 from model.backbone.mobilenet import get_mobilenet
 from model.backbone.densenet import get_densenet
+from model.backbone.transformer import get_transformer
 from model.meddef.meddef2 import get_meddef2
-from model.vgg_model import get_vgg
+from model.backbone.vgg import get_vgg
 from model.attention.MSARNet import MSARNet
 from model.meddef.meddef1 import get_meddef1
 from utils.memory_efficient_model import MemoryEfficientModel
@@ -32,7 +33,8 @@ class ModelLoader:
             'msarnet': {'func': MSARNet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'cbam_resnet': {'func': get_resnet_with_cbam, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
             'meddef1': {'func': get_meddef1, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
-            'meddef2': {'func': get_meddef2, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']}
+            'meddef2': {'func': get_meddef2, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
+            'transformer': {'func': get_transformer, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']}
         }
         logging.info("ModelLoader initialized with models: " +
                      ", ".join(self.models_dict.keys()))

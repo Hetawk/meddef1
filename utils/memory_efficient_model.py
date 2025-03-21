@@ -94,7 +94,7 @@ class MemoryEfficientModel:
     def _process_chunk(self, chunk, model):
         total_chunk_params = len(chunk)
         total_chunk_size = sum(param.numel() * param.element_size() for _, param in chunk)
-        logging.info(f"Processing chunk with {total_chunk_params} parameters ({total_chunk_size} bytes)...")
+        # logging.info(f"Processing chunk with {total_chunk_params} parameters ({total_chunk_size} bytes)...")
         for name, param in chunk:
             try:
                 # Pin memory and transfer in smallest possible units

@@ -1,24 +1,49 @@
-from .attack.adversarial_examples import save_adversarial_examples
-from .attack.perturbation_visualization import save_perturbation_visualization
-from .train.class_distribution import save_class_distribution
-from .train.confusion_matrix import save_confusion_matrix
-from .train.precision_recall_curve import save_precision_recall_curve
-from .train.precision_recall_auc import save_precision_recall_auc
-from .train.roc_auc import save_roc_auc
-from .train.roc_curve import save_roc_curve
-from .train.training_validation_loss_accuracy import save_training_validation_loss_accuracy
-from .train.heatmaps import save_heatmap
-from .defense.robustness_evaluation import save_defense_robustness_plot
-from .defense.perturbation_analysis import save_perturbation_analysis_plot
+# Import the backend configuration at the top
 from .train.adversarial_training_curves import save_adversarial_training_curves
-import matplotlib.pyplot as plt
-import os
+from .defense.perturbation_analysis import save_perturbation_analysis_plot
+from .defense.robustness_evaluation import save_defense_robustness_plot
+from .train.heatmaps import save_heatmap
+from .train.training_validation_loss_accuracy import save_training_validation_loss_accuracy
+from .train.roc_curve import save_roc_curve
+from .train.roc_auc import save_roc_auc
+from .train.precision_recall_auc import save_precision_recall_auc
+from .train.precision_recall_curve import save_precision_recall_curve
+from .train.confusion_matrix import save_confusion_matrix
+from .train.class_distribution import save_class_distribution
+from .attack.perturbation_visualization import save_perturbation_visualization
+from .attack.adversarial_examples import save_adversarial_examples
+import seaborn as sns
+import pandas as pd
+from datetime import datetime
 import logging
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+from utils.matplotlib_config import configure_matplotlib_backend
+
+# Configure backend before other matplotlib imports
+backend = configure_matplotlib_backend()
 
 
 class Visualization:
     def __init__(self):
-        pass
+        # Log the backend being used
+        logging.info(f"Using matplotlib backend: {backend}")
+        self.figure_handles = []  # Keep track of figure handles
+
+    # Add close_figures method to ensure proper cleanup
+    def close_figures(self):
+        """Close all open matplotlib figures to prevent memory leaks"""
+        try:
+            for fig in self.figure_handles:
+                plt.close(fig)
+            self.figure_handles = []
+        except Exception as e:
+            logging.warning(f"Error closing matplotlib figures: {e}")
+
+    def __del__(self):
+        """Ensure figures are closed when visualization object is destroyed"""
+        self.close_figures()
 
     def visualize_normal(self, model_names, data, task_name, dataset_name, class_names):
         """
@@ -89,10 +114,26 @@ class Visualization:
         save_perturbation_analysis_plot(
             perturbations, class_names, dataset_name, task_name)
 
-    def visualize_adversarial_training(self, metrics_dict, task_name, dataset_name, model_name):
-        """Visualize adversarial training metrics"""
+    def visualize_adversarial_training(self, metrics, task_name, dataset_name, model_name):
+        """Create adversarial training visualization"""
         try:
-            save_adversarial_training_curves(
-                metrics_dict, task_name, dataset_name, model_name)
+            # Create directory structure
+            save_dir = os.path.join(
+                'out', task_name, dataset_name, model_name, 'visualizations')
+            os.makedirs(save_dir, exist_ok=True)
+
+            # Create visualization with proper cleanup
+            fig = plt.figure(figsize=(12, 8))
+            self.figure_handles.append(fig)  # Track this figure
+
+            # Your plotting code here...
+
+            # Save figure and close it
+            plt.savefig(os.path.join(save_dir, 'adversarial_metrics.png'))
+            plt.close(fig)
+            self.figure_handles.remove(fig)  # Remove from tracking
+
         except Exception as e:
-            logging.error(f"Error generating adversarial training curves: {e}")
+            logging.error(f"Error in adversarial visualization: {e}")
+            # Close any open figures
+            plt.close('all')

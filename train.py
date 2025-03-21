@@ -7,6 +7,7 @@ import torch
 import pandas as pd
 import numpy as np
 from torch.cuda.amp import GradScaler, autocast
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from utils.adv_metrics import AdversarialMetrics
 from utils.training_logger import TrainingLogger
 from utils.robustness.regularization import Regularization
@@ -15,156 +16,32 @@ from model.model_loader import ModelLoader
 from loader.dataset_loader import DatasetLoader
 from utils.robustness.optimizers import OptimizerLoader
 from utils.robustness.lr_scheduler import LRSchedulerLoader
+from utils.utility import get_model_params
+from utils.weighted_losses import WeightedCrossEntropyLoss, AggressiveMinorityWeightedLoss, DynamicSampleWeightedLoss
+from utils.metrics import Metrics
+from utils.evaluator import Evaluator
+# Changed to import from argument_parser.py
+from argument_parser import parse_args
 import json
 import warnings  # added import
 from tqdm import tqdm   # Added import for progress bar
 import torch.backends.cudnn  # Add this to ensure cudnn is recognized
+from sklearn.metrics import precision_recall_curve, roc_curve, auc
+import matplotlib.pyplot as plt
+from collections import Counter
+
+# Try importing TensorBoardLogger, fall back to MetricsLogger if that fails
+try:
+    from utils.tensorboard_wrapper import TensorBoardLogger
+    USE_TENSORBOARD = True
+    logging.info("Successfully imported TensorBoardLogger")
+except ImportError:
+    from utils.metrics_logger import MetricsLogger
+    USE_TENSORBOARD = False
+    logging.info("TensorBoard not available, using MetricsLogger instead")
 
 # added to suppress FutureWarning
 warnings.filterwarnings("ignore", category=FutureWarning)
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description='Training Configuration')
-
-    # Dataset and processing
-    parser.add_argument('--data', nargs='+', required=True, type=str,
-                        help='Dataset names to process')
-    parser.add_argument('--num_workers', type=int, default=4,
-                        help='Number of data loading workers')
-    parser.add_argument('--pin_memory', action='store_true',
-                        help='Use pinned memory')
-
-    # Model architecture - update these two arguments
-    parser.add_argument('--arch', '-a', nargs='+', default=['meddef', 'resnet', 'densenet'],
-                        help='Architecture(s) to use. Provide one or multiple values. Separate multiple names with space or comma.')
-    parser.add_argument('--depth', type=str, default='{"meddef": [1.0, 1.1], "resnet": [18, 34], "densenet": [121]}',
-                        help='Model depths as JSON string')
-
-    # Training parameters
-    parser.add_argument('--train_batch', type=int, default=32,
-                        help='Training batch size')
-    parser.add_argument('--test_batch', type=int, default=32,
-                        help='Test/Val batch size')
-    parser.add_argument('--epochs', type=int, default=100,
-                        help='Number of epochs')
-    parser.add_argument('--lr', type=float, default=0.001,
-                        help='Learning rate')
-    parser.add_argument('--drop', type=float, default=0.0,
-                        help='Dropout rate')
-    parser.add_argument('--momentum', type=float, default=0.9,
-                        help='Momentum for optimizer')
-    parser.add_argument('--weight_decay', type=float, default=1e-4,
-                        help='Weight decay')
-    parser.add_argument('--lambda_l2', type=float, default=1e-4,
-                        help='L2 regularization strength')
-
-    # Training control
-    parser.add_argument('--patience', type=int, default=10,
-                        help='Patience for early stopping')
-    parser.add_argument('--accumulation_steps', type=int, default=1,
-                        help='Gradient accumulation steps')
-    parser.add_argument('--max_grad_norm', type=float, default=1.0,
-                        help='Max gradient norm')
-
-    # Device configuration
-    parser.add_argument('--gpu-ids', default='0',
-                        help='GPU IDs to use (comma-separated)')
-    parser.add_argument('--device-index', type=int, default=0,
-                        help='Primary GPU index to use')
-
-    # Task specification
-    parser.add_argument('--task_name', type=str,
-                        choices=['normal_training', 'attack', 'defense'],
-                        default='normal_training',
-                        help='Task to perform')
-
-    # Add back manualSeed argument
-    parser.add_argument('--manualSeed', type=int, default=None,
-                        help='manual seed for reproducibility')
-
-    # Add optimizer argument
-    parser.add_argument('--optimizer', type=str, default='adam',
-                        choices=['adam', 'sgd', 'rmsprop', 'adagrad'],
-                        help='Optimizer to use for training')
-
-    # Add scheduler argument
-    parser.add_argument('--scheduler', type=str, default='StepLR',
-                        choices=['StepLR', 'ExponentialLR',
-                                 'ReduceLROnPlateau'],
-                        help='Learning rate scheduler')
-    parser.add_argument('--lr_step', type=int, default=30,
-                        help='Step size for StepLR scheduler')
-    parser.add_argument('--lr_gamma', type=float, default=0.1,
-                        help='Gamma for learning rate scheduler')
-    parser.add_argument('--lr_patience', type=int, default=10,
-                        help='Patience for ReduceLROnPlateau scheduler')
-
-    # Add adversarial training arguments
-    parser.add_argument('--adversarial', action='store_true',
-                        help='Enable adversarial training')
-    parser.add_argument('--attack_type', type=str, nargs='+', 
-                        default=['fgsm'],
-                        choices=['fgsm', 'pgd', 'bim', 'jsma'],
-                        help='Type(s) of attack for adversarial training. Can specify multiple attacks.')
-    parser.add_argument('--attack_eps', type=float, default=0.3,
-                        help='Epsilon for adversarial attacks')
-    parser.add_argument('--attack_alpha', type=float, default=0.01,
-                        help='Alpha for adversarial attacks')
-    parser.add_argument('--attack_steps', type=int, default=40,
-                        help='Number of steps for iterative attacks')
-    parser.add_argument('--adv_weight', type=float, default=1.0,
-                        help='Weight for adversarial loss')
-    parser.add_argument('--adv_init_mag', type=float, default=0.01,
-                        help='Initial magnitude for adversarial perturbation')
-    parser.add_argument('--alpha', type=float, default=0.01,
-                        help='Alpha for PGD attack')
-    parser.add_argument('--iterations', type=int, default=40,
-                        help='Iterations for PGD attack')
-    parser.add_argument('--save_attacks', action='store_true',
-                        help='Save generated adversarial samples')
-
-    # New arguments for defense:
-    parser.add_argument('--model_path', type=str, default='',
-                        help='Path to saved model weights')
-    parser.add_argument('--prune_rate', type=float, default=0.3,
-                        help='Pruning rate for defense task')
-
-    args = parser.parse_args()
-
-    # Process architecture names
-    if isinstance(args.arch, str):
-        args.arch = [x.strip() for x in args.arch.strip('[]').split(',')]
-
-    # Convert depth string to dictionary - simplified version
-    if isinstance(args.depth, str):
-        # Remove spaces and single quotes
-        depth_str = args.depth.strip()
-        if depth_str.startswith("'") and depth_str.endswith("'"):
-            depth_str = depth_str[1:-1]
-
-        try:
-            # First try direct JSON parsing
-            args.depth = json.loads(depth_str)
-        except json.JSONDecodeError:
-            # If that fails, try manual parsing
-            # Remove curly braces
-            depth_str = depth_str.strip('{}')
-            # Split into key and value
-            key, value = depth_str.split(':', 1)
-            key = key.strip()
-            value = value.strip()
-            # Parse the value as a list
-            value = eval(value)  # Safe here since we know it's a list
-            args.depth = {key: value}
-
-    # Configure CUDA devices
-    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_ids
-    use_cuda = torch.cuda.is_available()
-    args.device = torch.device(
-        f"cuda:{args.device_index}" if use_cuda else "cpu")
-
-    return args
 
 
 def _init_history():
@@ -183,7 +60,16 @@ def _init_history():
         'adv_loss': [],
         'adv_accuracy': [],
         'adv_predictions': [],
-        'adv_targets': []
+        'adv_targets': [],
+        # New detailed metrics
+        'precision': [],
+        'recall': [],
+        'f1': [],
+        'per_class_metrics': [],
+        'val_precision': [],
+        'val_recall': [],
+        'val_f1': [],
+        'val_per_class_metrics': []
     }
 
 
@@ -198,13 +84,58 @@ class Trainer:
         self.val_loader = val_loader
         self.test_loader = test_loader
         self.optimizer = optimizer
-        self.criterion = criterion
         self.scheduler = scheduler
         self.model_name = model_name
         self.task_name = task_name
         self.dataset_name = dataset_name
         self.device = device
         self.config = config
+
+        # Set up loss function based on config
+        loss_type = getattr(config, 'loss_type', 'standard')
+        if loss_type == 'standard':
+            self.criterion = criterion
+            logging.info("Using standard CrossEntropy loss")
+        else:
+            logging.info(f"Using {loss_type} loss function")
+
+            # Get all targets from the dataset for class distribution analysis
+            try:
+                # Try to get targets from train_loader.dataset.targets (common for ImageFolder)
+                if hasattr(train_loader.dataset, 'targets'):
+                    dataset_targets = train_loader.dataset.targets
+                # Try to get targets from TensorDataset
+                elif hasattr(train_loader.dataset, 'tensors') and len(train_loader.dataset.tensors) > 1:
+                    dataset_targets = train_loader.dataset.tensors[1]
+                else:
+                    # Collect targets by iterating through dataloader (slower but works)
+                    dataset_targets = []
+                    logging.info(
+                        "Collecting class distribution from dataloader...")
+                    for _, batch_targets in train_loader:
+                        dataset_targets.extend(batch_targets.cpu().numpy())
+                    dataset_targets = np.array(dataset_targets)
+
+                # Initialize the appropriate loss function based on loss_type
+                if loss_type == 'weighted':
+                    self.criterion = WeightedCrossEntropyLoss(
+                        dataset=dataset_targets)
+                elif loss_type == 'aggressive':
+                    self.criterion = AggressiveMinorityWeightedLoss(
+                        dataset=dataset_targets)
+                elif loss_type == 'dynamic':
+                    alpha = getattr(config, 'focal_alpha', 0.5)
+                    gamma = getattr(config, 'focal_gamma', 2.0)
+                    self.criterion = DynamicSampleWeightedLoss(
+                        max_epochs=getattr(config, 'epochs', 100),
+                        alpha=alpha, gamma=gamma)
+
+                logging.info(
+                    f"Successfully initialized {loss_type} loss function")
+            except Exception as e:
+                logging.error(
+                    f"Error initializing weighted loss: {e}. Falling back to standard loss.")
+                self.criterion = criterion
 
         self.has_trained = False
         self.epochs = getattr(config, 'epochs', 100)
@@ -238,11 +169,14 @@ class Trainer:
             logging.info(
                 f"Training {self.model_name} with adversarial training...")
 
+        # Initialize tracking variables for metrics
         self.error_if_nonfinite = False
         self.val_loss = float('inf')
         self.current_lr = self.args.lr
         self.best_val_loss = float('inf')
         self.best_val_acc = 0.0
+        self.best_val_f1 = 0.0  # Initialize best F1 score for tracking
+        self.best_val_balanced_acc = 0.0  # Initialize best balanced accuracy
         self.no_improvement_count = 0
         self.adv_metrics = AdversarialMetrics()
 
@@ -251,20 +185,293 @@ class Trainer:
         self.predictions = []
         self.adv_predictions = []
 
-    @staticmethod
-    def _setup_random_seeds(self, seed):
-        if seed is None:
-            seed = random.randint(1, 10000)
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(seed)
-            torch.backends.cudnn.deterministic = True
-            torch.backends.cudnn.benchmark = False
+        # Use either TensorBoardLogger or MetricsLogger depending on availability
+        if USE_TENSORBOARD:
+            self.tb_logger = TensorBoardLogger(
+                task_name, dataset_name, model_name)
+        else:
+            self.tb_logger = MetricsLogger(task_name, dataset_name, model_name)
 
-    def get_model_params(self):
-        return sum(p.numel() for p in self.model.parameters()) / 1000000.0
+        # Log hyperparameters to TensorBoard
+        hparams = {
+            'learning_rate': getattr(config, 'lr', 0.001),
+            'batch_size': getattr(config, 'train_batch', 32),
+            'optimizer': getattr(config, 'optimizer', 'adam'),
+            'model': model_name,
+            'loss_type': getattr(config, 'loss_type', 'standard'),
+            'weight_decay': getattr(config, 'weight_decay', 1e-4),
+            'dropout': getattr(config, 'drop', 0.0),
+            'scheduler': getattr(config, 'scheduler', 'none')
+        }
+        self.tb_logger.log_hparams(hparams)
+
+        # Add new attributes for balanced metrics and class-specific metrics
+        self.class_names = self._get_class_names(train_loader)
+        self.per_class_metrics = getattr(config, 'per_class_metrics', True)
+
+        # Create a threshold tracker for binary classification
+        self.threshold = 0.5
+        self.optimize_threshold = getattr(config, 'optimize_threshold', False)
+
+        # Add history tracking for detailed metrics
+        self.history['precision'] = []
+        self.history['recall'] = []
+        self.history['f1'] = []
+        self.history['per_class_metrics'] = []
+        self.history['val_precision'] = []
+        self.history['val_recall'] = []
+        self.history['val_f1'] = []
+        self.history['val_per_class_metrics'] = []
+
+        # Create sampler attribute for potential reweighting
+        self.use_weighted_sampler = getattr(
+            config, 'use_weighted_sampler', False)
+        self.sampler = None
+
+        # Use weighted sampler if specified
+        if self.use_weighted_sampler:
+            self._setup_weighted_sampler(train_loader)
+
+    def _get_class_names(self, data_loader):
+        """Get class names from the dataset if available"""
+        if hasattr(data_loader.dataset, 'classes'):
+            return data_loader.dataset.classes
+        elif hasattr(data_loader.dataset, 'class_to_idx'):
+            # Map indices back to class names
+            class_to_idx = data_loader.dataset.class_to_idx
+            idx_to_class = {v: k for k, v in class_to_idx.items()}
+            return [idx_to_class.get(i, str(i)) for i in range(len(class_to_idx))]
+        else:
+            # Fallback to generic class names
+            # Try to infer number of classes from the criterion
+            if hasattr(self.criterion, 'weight') and self.criterion.weight is not None:
+                num_classes = len(self.criterion.weight)
+            else:
+                # Try to infer from the model's final layer
+                if hasattr(self.model, 'fc'):
+                    num_classes = self.model.fc.out_features
+                elif hasattr(self.model, 'head'):
+                    num_classes = self.model.head.out_features
+                else:
+                    num_classes = 2  # Default to binary classification
+            return [f"Class {i}" for i in range(num_classes)]
+
+    def _setup_weighted_sampler(self, train_loader):
+        """Setup WeightedRandomSampler based on class distribution"""
+        logging.info("Setting up WeightedRandomSampler for imbalanced data...")
+
+        try:
+            # Extract targets/labels from the dataset
+            targets = []
+            if hasattr(train_loader.dataset, 'targets'):
+                targets = train_loader.dataset.targets
+            elif hasattr(train_loader.dataset, 'tensors') and len(train_loader.dataset.tensors) > 1:
+                targets = train_loader.dataset.tensors[1].tolist()
+            else:
+                # Extract targets by iterating through the dataset
+                for _, target in train_loader.dataset:
+                    if torch.is_tensor(target):
+                        targets.append(target.item())
+                    else:
+                        targets.append(target)
+
+            # Count class frequencies
+            class_counts = Counter(targets)
+            logging.info(f"Class distribution: {dict(class_counts)}")
+
+            # Calculate class weights (inverse frequency)
+            total_samples = len(targets)
+            class_weights = {class_idx: total_samples /
+                             count for class_idx, count in class_counts.items()}
+
+            # Assign weights to each sample
+            weights = [class_weights[target] for target in targets]
+            weights = torch.DoubleTensor(weights)
+
+            # Create the sampler
+            self.sampler = WeightedRandomSampler(
+                weights, len(weights), replacement=True)
+
+            # Create new train loader with the sampler
+            self.train_loader = DataLoader(
+                train_loader.dataset,
+                batch_size=train_loader.batch_size,
+                sampler=self.sampler,
+                num_workers=train_loader.num_workers,
+                pin_memory=train_loader.pin_memory
+            )
+
+            logging.info("WeightedRandomSampler successfully created")
+        except Exception as e:
+            logging.error(f"Failed to create WeightedRandomSampler: {e}")
+
+    def calculate_detailed_metrics(self, true_labels, predictions, probabilities=None, phase="train"):
+        """Calculate detailed metrics including per-class performance"""
+        detailed_metrics = {}
+
+        # Convert tensors to numpy arrays if needed
+        if isinstance(true_labels, torch.Tensor):
+            true_labels = true_labels.cpu().numpy()
+        if isinstance(predictions, torch.Tensor):
+            predictions = predictions.cpu().numpy()
+        if probabilities is not None and isinstance(probabilities, torch.Tensor):
+            probabilities = probabilities.cpu().numpy()
+
+        # Calculate overall metrics
+        metrics_dict = Metrics.calculate_metrics(
+            true_labels, predictions, probabilities)
+        detailed_metrics.update(metrics_dict)
+
+        # Add per-class metrics if requested
+        if self.per_class_metrics:
+            per_class = {}
+            classes = np.unique(true_labels)
+
+            for cls in classes:
+                cls_mask = (true_labels == cls)
+                if sum(cls_mask) == 0:
+                    continue
+
+                # Calculate binary metrics for this class (one-vs-rest)
+                cls_true = (true_labels == cls).astype(int)
+                cls_pred = (predictions == cls).astype(int)
+
+                # Basic metrics per class
+                try:
+                    cls_metrics = {
+                        'accuracy': Metrics.to_numpy(np.mean(cls_true == cls_pred)),
+                        'precision': Metrics.calculate_metrics(cls_true, cls_pred)['precision'],
+                        'recall': Metrics.calculate_metrics(cls_true, cls_pred)['recall'],
+                        'f1': Metrics.calculate_metrics(cls_true, cls_pred)['f1'],
+                        'support': np.sum(cls_true)
+                    }
+
+                    class_name = self.class_names[cls] if cls < len(
+                        self.class_names) else f"Class {cls}"
+                    per_class[class_name] = cls_metrics
+                except Exception as e:
+                    logging.warning(
+                        f"Error calculating metrics for class {cls}: {e}")
+
+            detailed_metrics['per_class'] = per_class
+
+        # If it's binary classification and we have probabilities, optimize threshold
+        if len(np.unique(true_labels)) == 2 and probabilities is not None and self.optimize_threshold:
+            if phase == "val":
+                self._optimize_threshold(true_labels, probabilities)
+
+            # Apply optimal threshold to predictions
+            if probabilities.ndim > 1:
+                # Use probability of positive class
+                opt_preds = (probabilities[:, 1] > self.threshold).astype(int)
+            else:
+                opt_preds = (probabilities > self.threshold).astype(int)
+
+            # Calculate metrics with optimized threshold
+            opt_metrics = Metrics.calculate_metrics(true_labels, opt_preds)
+            detailed_metrics['optimized_threshold'] = self.threshold
+            detailed_metrics['optimized_accuracy'] = opt_metrics['accuracy']
+            detailed_metrics['optimized_f1'] = opt_metrics['f1']
+
+        return detailed_metrics
+
+    def _optimize_threshold(self, true_labels, probabilities):
+        """Find optimal threshold for binary classification"""
+        # Handle both one-hot and regular probabilities
+        if probabilities.ndim > 1 and probabilities.shape[1] > 1:
+            probs = probabilities[:, 1]  # Probability of positive class
+        else:
+            probs = probabilities
+
+        # Get precision, recall, thresholds
+        precision, recall, thresholds = precision_recall_curve(
+            true_labels, probs)
+
+        # Calculate F1 score for each threshold
+        f1_scores = 2 * precision * recall / (precision + recall + 1e-10)
+
+        # Find threshold with best F1 score
+        best_idx = np.argmax(f1_scores)
+        if best_idx < len(thresholds):
+            self.threshold = thresholds[best_idx]
+        else:
+            self.threshold = 0.5  # Default if something went wrong
+
+        logging.info(
+            f"Optimized threshold: {self.threshold:.4f} with F1: {f1_scores[best_idx]:.4f}")
+
+    def _visualize_metrics(self, metrics, epoch, phase="train"):
+        """Create and save visualizations for metrics with proper resource handling"""
+        if not hasattr(self, 'visualization'):
+            return
+
+        # Only create visualizations periodically to save resources
+        if epoch % 10 != 0 and epoch != self.epochs - 1:
+            return
+
+        # Create directory for visualizations
+        viz_dir = os.path.join('out', self.task_name, self.dataset_name,
+                               self.model_name, 'visualizations')
+        os.makedirs(viz_dir, exist_ok=True)
+
+        try:
+            # Create confusion matrix plot
+            if 'confusion_matrix' in metrics:
+                cm = np.array(metrics['confusion_matrix'])
+                fig = plt.figure(figsize=(10, 8))
+                plt.imshow(cm, interpolation='nearest', cmap='Blues')
+                plt.title(f'Confusion Matrix - Epoch {epoch+1}')
+                plt.colorbar()
+
+                # Add class labels
+                classes = self.class_names if len(self.class_names) == len(cm) else [
+                    f"Class {i}" for i in range(len(cm))]
+                tick_marks = np.arange(len(classes))
+                plt.xticks(tick_marks, classes, rotation=45)
+                plt.yticks(tick_marks, classes)
+
+                # Add text annotations
+                thresh = cm.max() / 2.
+                for i in range(cm.shape[0]):
+                    for j in range(cm.shape[1]):
+                        plt.text(j, i, format(cm[i, j], 'd'),
+                                 horizontalalignment="center",
+                                 color="white" if cm[i, j] > thresh else "black")
+
+                plt.tight_layout()
+                plt.ylabel('True label')
+                plt.xlabel('Predicted label')
+                plt.savefig(os.path.join(
+                    viz_dir, f'confusion_matrix_{phase}_epoch_{epoch+1}.png'))
+                plt.close(fig)  # Explicitly close figure
+
+            # Create per-class metrics bar chart
+            if 'per_class' in metrics:
+                per_class = metrics['per_class']
+                metrics_to_plot = ['precision', 'recall', 'f1']
+
+                fig = plt.figure(figsize=(12, 6))
+                x = np.arange(len(per_class))
+                width = 0.25
+
+                for i, metric in enumerate(metrics_to_plot):
+                    values = [per_class[cls][metric] for cls in per_class]
+                    plt.bar(x + width * (i - 1), values,
+                            width, label=metric.capitalize())
+
+                plt.xlabel('Class')
+                plt.ylabel('Score')
+                plt.title(f'Per-Class Metrics - Epoch {epoch+1}')
+                plt.xticks(x, per_class.keys(), rotation=45)
+                plt.legend()
+                plt.tight_layout()
+                plt.savefig(os.path.join(
+                    viz_dir, f'per_class_metrics_{phase}_epoch_{epoch+1}.png'))
+                plt.close(fig)  # Explicitly close figure
+
+        except Exception as e:
+            logging.warning(f"Failed to create visualization: {e}")
+            plt.close('all')  # Close any open figures on error
 
     def train(self, patience):
         if self.has_trained:
@@ -279,14 +486,35 @@ class Trainer:
 
         self.model.train()
         total_batches = len(self.train_loader)
-        # log_points = [0, total_batches // 2, total_batches - 1]
-        initial_params = self.get_model_params()
+        initial_params = get_model_params(self.model)
         logging.info(f"Initial model parameters: {initial_params:.2f}M")
 
-        # No need to store start_time if not used besides logging—included in progress log below.
+        # Configure early stopping
+        min_epochs = getattr(self.args, 'min_epochs', 0)
+        early_stopping_metric = getattr(
+            self.args, 'early_stopping_metric', 'f1')  # Default to f1
         saved_attacks = False
 
+        # Track best metrics
+        self.best_val_loss = float('inf')
+        self.best_val_acc = 0.0
+
+        # Log model graph to TensorBoard (try with a sample batch)
+        try:
+            sample_input = next(iter(self.train_loader))[0][:1].to(self.device)
+            self.tb_logger.log_model_graph(self.model, sample_input)
+        except Exception as e:
+            logging.warning(
+                f"Could not add model graph to TensorBoard: {str(e)}")
+
+        # Add tracking for detailed metrics
         for epoch in range(self.epochs):
+            # Update epoch for dynamic sample weighting if needed
+            if isinstance(self.criterion, DynamicSampleWeightedLoss):
+                self.criterion.update_epoch(epoch)
+                logging.info(
+                    f"Updated dynamic loss function for epoch {epoch+1}")
+
             self.model.train()
             epoch_loss = 0.0
             correct = 0
@@ -297,6 +525,7 @@ class Trainer:
             # Prepare lists to log epoch results
             epoch_true_labels = []
             epoch_predictions = []
+            epoch_probabilities = []
             self.optimizer.zero_grad(set_to_none=True)
 
             for batch_idx, (data, target) in enumerate(tqdm(self.train_loader, desc=f"Epoch {epoch+1}/{self.epochs}", unit="batch")):
@@ -348,6 +577,9 @@ class Trainer:
                         total += target.size(0)
                         epoch_true_labels.extend(target.cpu().numpy())
                         epoch_predictions.extend(pred.cpu().numpy())
+                        output_probs = torch.nn.functional.softmax(
+                            output, dim=1)
+                        epoch_probabilities.extend(output_probs.cpu().numpy())
                     if (batch_idx + 1) % self.accumulation_steps == 0:
                         self.scaler.unscale_(self.optimizer)
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(
@@ -372,22 +604,75 @@ class Trainer:
                     continue
 
             val_loss, val_accuracy = self.validate()
+            # Run validation with detailed metrics to get F1 and other scores
+            val_loss, val_accuracy, val_detailed_metrics = self.validate_with_metrics()
+
+            # Extract F1 score and balanced accuracy from detailed metrics
+            val_f1 = val_detailed_metrics.get('f1', 0.0)
+            val_balanced_acc = val_detailed_metrics.get(
+                'balanced_accuracy', 0.0)
+
             if self.scheduler is not None:
                 if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    self.scheduler.step(val_loss)
+                    # Use appropriate metric for scheduler
+                    if early_stopping_metric == 'f1':
+                        # Negate because ReduceLROnPlateau minimizes
+                        self.scheduler.step(-val_f1)
+                    elif early_stopping_metric == 'balanced_acc':
+                        # Negate because ReduceLROnPlateau minimizes
+                        self.scheduler.step(-val_balanced_acc)
+                    else:
+                        self.scheduler.step(val_loss)
                 else:
                     self.scheduler.step()
-            if val_loss < self.best_val_loss:
-                self.best_val_loss = val_loss
-                self.best_val_acc = val_accuracy
+
+            # Save best model based on validation performance using the selected metric
+            improved = False
+
+            if early_stopping_metric == 'loss':
+                if val_loss < self.best_val_loss:
+                    self.best_val_loss = val_loss
+                    self.best_val_acc = val_accuracy
+                    self.best_val_f1 = val_f1
+                    self.best_val_balanced_acc = val_balanced_acc
+                    improved = True
+            elif early_stopping_metric == 'f1':
+                if val_f1 > self.best_val_f1:
+                    self.best_val_loss = val_loss
+                    self.best_val_acc = val_accuracy
+                    self.best_val_f1 = val_f1
+                    self.best_val_balanced_acc = val_balanced_acc
+                    improved = True
+            elif early_stopping_metric == 'balanced_acc':
+                if val_balanced_acc > self.best_val_balanced_acc:
+                    self.best_val_loss = val_loss
+                    self.best_val_acc = val_accuracy
+                    self.best_val_f1 = val_f1
+                    self.best_val_balanced_acc = val_balanced_acc
+                    improved = True
+            else:  # Default to accuracy
+                if val_accuracy > self.best_val_acc:
+                    self.best_val_loss = val_loss
+                    self.best_val_acc = val_accuracy
+                    self.best_val_f1 = val_f1
+                    self.best_val_balanced_acc = val_balanced_acc
+                    improved = True
+
+            if improved:
                 self.no_improvement_count = 0
                 self.save_model(
                     f"save_model/best_{self.model_name}_{self.dataset_name}.pth")
+                logging.info(
+                    f"Improved {early_stopping_metric}! Saving model.")
             else:
                 self.no_improvement_count += 1
-            if self.no_improvement_count >= patience:
                 logging.info(
-                    f"Early stopping triggered after {epoch + 1} epochs")
+                    f"No improvement in {early_stopping_metric} for {self.no_improvement_count} epochs.")
+
+            # Only apply early stopping after minimum epochs
+            if epoch >= min_epochs and self.no_improvement_count >= patience:
+                logging.info(
+                    f"Early stopping triggered after {epoch + 1} epochs (minimum epochs: {min_epochs})")
                 break
 
             epoch_acc = correct / total if total > 0 else 0
@@ -407,7 +692,94 @@ class Trainer:
                                  epoch_true_labels, epoch_predictions, 0)  # duration not used
             self.visualization.visualize_adversarial_training(
                 self.adv_metrics.metrics, self.task_name, self.dataset_name, self.model_name)
-        return self.best_val_loss, self.best_val_acc
+
+            # Log epoch metrics to TensorBoard
+            epoch_acc = correct / total if total > 0 else 0
+            epoch_loss = epoch_loss / len(self.train_loader)
+            self.tb_logger.log_epoch_metrics(
+                epoch, epoch_loss, epoch_acc,
+                val_loss, val_accuracy,
+                self.current_lr,
+                avg_adv_loss if self.adversarial else None,
+                adv_accuracy if self.adversarial else None
+            )
+
+            # Calculate and log detailed metrics
+            detailed_metrics = self.calculate_detailed_metrics(
+                np.array(epoch_true_labels),
+                np.array(epoch_predictions),
+                np.array(epoch_probabilities),
+                phase="train"
+            )
+
+            # Update history with detailed metrics
+            self.history['precision'].append(
+                detailed_metrics.get('precision', 0))
+            self.history['recall'].append(detailed_metrics.get('recall', 0))
+            self.history['f1'].append(detailed_metrics.get('f1', 0))
+            self.history['per_class_metrics'].append(
+                detailed_metrics.get('per_class', {}))
+
+            # Visualize metrics periodically
+            self._visualize_metrics(detailed_metrics, epoch, phase="train")
+
+            # Log detailed training metrics
+            logging.info(f"Epoch {epoch+1} Training - Accuracy: {detailed_metrics['accuracy']:.4f}, "
+                         f"Precision: {detailed_metrics['precision']:.4f}, "
+                         f"Recall: {detailed_metrics['recall']:.4f}, "
+                         f"F1: {detailed_metrics['f1']:.4f}")
+
+            # Log per-class metrics if available
+            if 'per_class' in detailed_metrics:
+                per_class = detailed_metrics['per_class']
+                for cls_name, cls_metrics in per_class.items():
+                    logging.info(f"  {cls_name}: F1={cls_metrics['f1']:.4f}, "
+                                 f"Precision={cls_metrics['precision']:.4f}, "
+                                 f"Recall={cls_metrics['recall']:.4f}, "
+                                 f"Support={cls_metrics['support']}")
+
+            # Run validation with detailed metrics
+            val_loss, val_accuracy, val_detailed_metrics = self.validate_with_metrics()
+
+            # Update history with validation metrics
+            self.history['val_precision'].append(
+                val_detailed_metrics.get('precision', 0))
+            self.history['val_recall'].append(
+                val_detailed_metrics.get('recall', 0))
+            self.history['val_f1'].append(val_detailed_metrics.get('f1', 0))
+            self.history['val_per_class_metrics'].append(
+                val_detailed_metrics.get('per_class', {}))
+
+            # Log all key metrics clearly
+            logging.info(f"Epoch {epoch+1} Validation - "
+                         f"Loss: {val_loss:.4f}, "
+                         f"Accuracy: {val_accuracy:.4f}, "
+                         f"F1: {val_f1:.4f}, "
+                         f"Balanced Acc: {val_balanced_acc:.4f}")
+
+            # ...existing code...
+
+        # After training complete, add final test results
+        test_results = self.test()
+        if self.adversarial:
+            test_loss, test_accuracy, adv_test_loss, adv_test_accuracy = test_results
+            self.tb_logger.log_test_results(
+                test_loss, test_accuracy, adv_test_loss, adv_test_accuracy)
+        else:
+            test_loss, test_accuracy = test_results
+            self.tb_logger.log_test_results(test_loss, test_accuracy)
+
+        # After training complete, log best metrics
+        logging.info(f"Training finished. Best metrics - "
+                     f"Loss: {self.best_val_loss:.4f}, "
+                     f"Accuracy: {self.best_val_acc:.4f}, "
+                     f"F1: {self.best_val_f1:.4f}, "
+                     f"Balanced Acc: {self.best_val_balanced_acc:.4f}")
+
+        # Close the TensorBoard logger
+        self.tb_logger.close()
+
+        return self.best_val_loss, self.best_val_acc, self.best_val_f1
 
     def _log_training_progress(self, epoch, batch_idx, data, loss, correct, total, start_time):
         accuracy = correct / total if total > 0 else 0
@@ -498,56 +870,228 @@ class Trainer:
             self.model.train()
         return val_loss, accuracy
 
+    def validate_with_metrics(self):
+        """Validate with detailed metrics calculation"""
+        self.model.eval()
+        val_loss = 0
+        correct = 0
+        total = 0
+        val_predictions = []
+        val_targets = []
+        val_probabilities = []
+
+        try:
+            with torch.no_grad():
+                for batch_idx, (data, target) in enumerate(self.val_loader):
+                    if isinstance(data, torch.Tensor):
+                        data = data.to(self.device, non_blocking=True)
+                    if isinstance(target, torch.Tensor):
+                        target = target.to(self.device, non_blocking=True)
+
+                    with autocast():
+                        output = self.model(data)
+                        loss = self.criterion(output, target)
+
+                    val_loss += loss.item()
+
+                    # Get probabilities and predictions
+                    probs = torch.nn.functional.softmax(output, dim=1)
+                    pred = output.argmax(dim=1, keepdim=True)
+
+                    # Update metrics
+                    correct += pred.eq(target.view_as(pred)).sum().item()
+                    total += target.size(0)
+
+                    # Store results for detailed metrics
+                    val_predictions.extend(pred.cpu().numpy())
+                    val_targets.extend(target.cpu().numpy())
+                    val_probabilities.extend(probs.cpu().numpy())
+
+            val_loss /= len(self.val_loader)
+            accuracy = correct / total if total > 0 else 0
+
+            # Calculate detailed metrics
+            detailed_metrics = self.calculate_detailed_metrics(
+                np.array(val_targets),
+                np.array(val_predictions),
+                np.array(val_probabilities),
+                phase="val"
+            )
+
+            # Visualize metrics
+            self._visualize_metrics(detailed_metrics, epoch=0, phase="val")
+
+            # Log detailed metrics
+            logging.info(f"Validation - Loss: {val_loss:.4f}, "
+                         f"Accuracy: {accuracy:.4f}, "
+                         f"Precision: {detailed_metrics['precision']:.4f}, "
+                         f"Recall: {detailed_metrics['recall']:.4f}, "
+                         f"F1: {detailed_metrics['f1']:.4f}")
+
+            # Log per-class metrics
+            if 'per_class' in detailed_metrics:
+                per_class = detailed_metrics['per_class']
+                for cls_name, cls_metrics in per_class.items():
+                    logging.info(f"  {cls_name}: F1={cls_metrics['f1']:.4f}, "
+                                 f"Precision={cls_metrics['precision']:.4f}, "
+                                 f"Recall={cls_metrics['recall']:.4f}")
+
+            return val_loss, accuracy, detailed_metrics
+
+        except Exception as e:
+            logging.error(f"Error during validation with metrics: {e}")
+            return float('inf'), 0.0, {}
+        finally:
+            self.model.train()
+
     def test(self):
+        """Enhanced testing with detailed metrics"""
         self.model.eval()
         test_loss = 0
-        adv_test_loss = 0
         correct = 0
-        adv_correct = 0
         total = 0
+
+        # Store detailed results for metrics calculation
         self.true_labels = []
         self.predictions = []
-        self.adv_predictions = []
-        adv_test_accuracy = 0  # Initialize
+        self.probabilities = []
+
         with torch.no_grad():
-            for data, target in self.test_loader:
+            for data, target in tqdm(self.test_loader, desc="Testing", unit="batch"):
                 if isinstance(data, torch.Tensor):
                     data = data.to(self.device)
                 if isinstance(target, torch.Tensor):
                     target = target.to(self.device)
+
+                # Forward pass
                 output = self.model(data)
                 test_loss += self.criterion(output, target).item()
+
+                # Get probabilities and predictions
+                probs = torch.nn.functional.softmax(output, dim=1)
                 pred = output.argmax(dim=1, keepdim=True)
+
+                # Update metrics
                 correct += pred.eq(target.view_as(pred)).sum().item()
-                if self.adversarial:
-                    with torch.enable_grad():
-                        if hasattr(self.adversarial_trainer.attack, 'generate'):
-                            adv_data = self.adversarial_trainer.attack.generate(
-                                data, target, self.args.epsilon)
-                        else:
-                            _, adv_data, _ = self.adversarial_trainer.attack.attack(
-                                data, target)
-                    adv_output = self.model(adv_data)
-                    adv_test_loss += self.criterion(adv_output, target).item()
-                    adv_pred = adv_output.argmax(dim=1, keepdim=True)
-                    adv_correct += adv_pred.eq(target.view_as(adv_pred)
-                                               ).sum().item()
-                    self.adv_predictions.extend(adv_output.cpu().numpy())
                 total += target.size(0)
+
+                # Store for detailed metrics
                 self.true_labels.extend(target.cpu().numpy())
-                self.predictions.extend(output.cpu().numpy())
+                self.predictions.extend(pred.cpu().numpy())
+                self.probabilities.extend(probs.cpu().numpy())
+
+                # ... existing adversarial code ...
+
         test_loss /= len(self.test_loader)
         accuracy = correct / total if total > 0 else 0
-        if self.adversarial:
-            adv_test_loss /= len(self.test_loader)
-            adv_test_accuracy = adv_correct / total if total > 0 else 0
-            logging.info(
-                f'Test Results - Clean: Loss={test_loss:.4f}, Acc={accuracy:.4f} | Adversarial: Loss={adv_test_loss:.4f}, Acc={adv_test_accuracy:.4f}')
-        else:
-            logging.info(
-                f'Test Results - Loss={test_loss:.4f}, Accuracy={accuracy:.4f}')
+
+        # Calculate and log detailed metrics
+        detailed_metrics = self.calculate_detailed_metrics(
+            np.array(self.true_labels),
+            np.array(self.predictions),
+            np.array(self.probabilities),
+            phase="test"
+        )
+
+        # Create evaluator and save metrics
+        evaluator = Evaluator(
+            model_name=self.model_name,
+            results=[],
+            true_labels=np.array(self.true_labels),
+            all_predictions=np.array(self.predictions),
+            task_name=self.task_name,
+            all_probabilities=np.array(self.probabilities)
+        )
+        evaluator.save_metrics(detailed_metrics, self.dataset_name)
+
+        # Create threshold optimization curve for binary classification
+        if len(np.unique(self.true_labels)) == 2 and len(self.probabilities) > 0:
+            self._create_threshold_curve(
+                np.array(self.true_labels), np.array(self.probabilities))
+
+        # Log detailed test metrics
+        logging.info(f"Test Results - Loss: {test_loss:.4f}, "
+                     f"Accuracy: {accuracy:.4f}, "
+                     f"Precision: {detailed_metrics['precision']:.4f}, "
+                     f"Recall: {detailed_metrics['recall']:.4f}, "
+                     f"F1: {detailed_metrics['f1']:.4f}")
+
+        # Log per-class metrics
+        if 'per_class' in detailed_metrics:
+            per_class = detailed_metrics['per_class']
+            for cls_name, cls_metrics in per_class.items():
+                logging.info(f"  {cls_name}: F1={cls_metrics['f1']:.4f}, "
+                             f"Precision={cls_metrics['precision']:.4f}, "
+                             f"Recall={cls_metrics['recall']:.4f}, "
+                             f"Support={cls_metrics['support']}")
+
         self.model.train()
-        return (test_loss, accuracy) if not self.adversarial else (test_loss, accuracy, adv_test_loss, adv_test_accuracy)
+
+        # Include detailed metrics in the return value
+        return (test_loss, accuracy, detailed_metrics) if not self.adversarial else (test_loss, accuracy, detailed_metrics, self.adv_test_loss, self.adv_test_accuracy)
+
+    def _create_threshold_curve(self, true_labels, probabilities):
+        """Create and save threshold optimization curve for binary classification"""
+        try:
+            # Get probabilities for positive class
+            if probabilities.ndim > 1 and probabilities.shape[1] > 1:
+                pos_probs = probabilities[:, 1]
+            else:
+                pos_probs = probabilities
+
+            # Calculate precision, recall, thresholds
+            precision, recall, thresholds = precision_recall_curve(
+                true_labels, pos_probs)
+
+            # Calculate F1 score for each threshold
+            f1_scores = 2 * precision * recall / (precision + recall + 1e-10)
+
+            # Create directory for visualizations
+            viz_dir = os.path.join('out', self.task_name, self.dataset_name,
+                                   self.model_name, 'visualizations')
+            os.makedirs(viz_dir, exist_ok=True)
+
+            # Create precision-recall vs threshold curve
+            plt.figure(figsize=(10, 6))
+            plt.plot(thresholds, precision[:-1], 'b--', label='Precision')
+            plt.plot(thresholds, recall[:-1], 'g-', label='Recall')
+            plt.plot(thresholds, f1_scores[:-1], 'r-', label='F1 Score')
+
+            # Mark optimal threshold
+            best_idx = np.argmax(f1_scores[:-1])
+            best_threshold = thresholds[best_idx]
+            plt.axvline(x=best_threshold, color='k', linestyle='-', alpha=0.3)
+            plt.text(best_threshold, 0.5, f'Best threshold: {best_threshold:.4f}',
+                     rotation=90, verticalalignment='center')
+
+            plt.xlabel('Threshold')
+            plt.ylabel('Score')
+            plt.title('Precision, Recall, and F1 Score vs Threshold')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+            plt.savefig(os.path.join(viz_dir, 'threshold_optimization.png'))
+            plt.close()
+
+            # Create ROC curve
+            fpr, tpr, _ = roc_curve(true_labels, pos_probs)
+            roc_auc = auc(fpr, tpr)
+
+            plt.figure(figsize=(8, 6))
+            plt.plot(fpr, tpr, 'b-', label=f'ROC curve (AUC = {roc_auc:.4f})')
+            plt.plot([0, 1], [0, 1], 'k--')
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel('False Positive Rate')
+            plt.ylabel('True Positive Rate')
+            plt.title('Receiver Operating Characteristic (ROC) Curve')
+            plt.legend(loc='lower right')
+            plt.grid(True, alpha=0.3)
+            plt.savefig(os.path.join(viz_dir, 'roc_curve.png'))
+            plt.close()
+
+            logging.info(f"Threshold optimization curves saved to {viz_dir}")
+        except Exception as e:
+            logging.error(f"Error creating threshold curve: {e}")
 
     def save_model(self, path):
         filename, ext = os.path.splitext(path)
@@ -568,8 +1112,9 @@ class Trainer:
                                 self.dataset_name, self.model_name, filename)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
 
-        keys_to_check = ['loss', 'accuracy', 'duration',
-                         'val_loss', 'val_accuracy', 'true_labels', 'predictions']
+        keys_to_check = ['loss', 'accuracy', 'precision', 'recall', 'f1', 'duration',
+                         'val_loss', 'val_accuracy', 'val_precision', 'val_recall', 'val_f1',
+                         'true_labels', 'predictions']
 
         # Add check for empty history
         if not self.history['epoch']:
@@ -621,6 +1166,20 @@ class Trainer:
         self.model.to(self.device)
         self.model.eval()
         logging.info(f"Loaded model from {path}")
+
+    # Add a method to close the TensorBoard writer in case training is interrupted
+    def __del__(self):
+        """Clean up resources when the trainer is destroyed"""
+        if hasattr(self, 'tb_logger'):
+            self.tb_logger.close()
+
+        # Close all matplotlib figures
+        import matplotlib.pyplot as plt
+        plt.close('all')
+
+        # Clean up visualization resources
+        if hasattr(self, 'visualization') and hasattr(self.visualization, 'close_figures'):
+            self.visualization.close_figures()
 
 
 class TrainingManager:
@@ -681,6 +1240,25 @@ class TrainingManager:
         else:
             raise AttributeError("Dataset does not contain class information.")
 
+        # Log class distribution if using weighted loss
+        if hasattr(self.args, 'loss_type') and self.args.loss_type != 'standard':
+            try:
+                class_counts = {}
+                if hasattr(train_loader.dataset, 'targets'):
+                    for target in train_loader.dataset.targets:
+                        class_counts[target] = class_counts.get(target, 0) + 1
+                elif hasattr(train_loader.dataset, 'samples'):
+                    for _, target in train_loader.dataset.samples:
+                        class_counts[target] = class_counts.get(target, 0) + 1
+
+                if class_counts:
+                    logging.info(
+                        f"Class distribution for {dataset_name}: {class_counts}")
+                    logging.info(
+                        f"Using {self.args.loss_type} loss function for imbalanced data")
+            except Exception as e:
+                logging.warning(f"Couldn't analyze class distribution: {e}")
+
         # Get model for each architecture specified
         for arch in self.args.arch:
             try:
@@ -701,13 +1279,17 @@ class TrainingManager:
                         model, self.args)
                     scheduler = self.lr_scheduler_loader.get_scheduler(
                         optimizer, args=self.args)
+
+                    # Create base criterion - may be replaced by weighted criterion in Trainer
+                    base_criterion = torch.nn.CrossEntropyLoss()
+
                     trainer = Trainer(
                         model=model,
                         train_loader=train_loader,
                         val_loader=val_loader,
                         test_loader=test_loader,
                         optimizer=optimizer,
-                        criterion=torch.nn.CrossEntropyLoss(),
+                        criterion=base_criterion,
                         model_name=model_name,
                         task_name=self.args.task_name,
                         dataset_name=dataset_name,
@@ -715,6 +1297,7 @@ class TrainingManager:
                         config=self.args,
                         scheduler=scheduler
                     )
+
                     trainer.train(patience=self.args.patience)
 
                     # Handle both normal and adversarial test results

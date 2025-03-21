@@ -2,9 +2,9 @@ import os
 import logging
 import shutil
 from pathlib import Path
-from typing import Tuple, Dict
+from typing import Tuple, Dict, List, Optional
 import torch
-from torchvision import transforms  # Add this import
+from torchvision import transforms
 from torchvision.datasets import ImageFolder
 from torch.utils.data import DataLoader
 from sklearn.model_selection import train_test_split
@@ -71,12 +71,15 @@ class DatasetHandler:
                          val_batch_size: int,
                          test_batch_size: int,
                          num_workers: int = 4,
-                         pin_memory: bool = True) -> Tuple[DataLoader, DataLoader, DataLoader]:
-        """Process dataset and return dataloaders"""
+                         pin_memory: bool = True,
+                         enforce_split_ratio: bool = True,
+                         split_ratio: Tuple[float, float, float] = (0.8, 0.1, 0.1)) -> Tuple[DataLoader, DataLoader, DataLoader]:
+        """Process dataset with enforced train/val/test split and return dataloaders"""
         output_path = Path(output_dir) / self.dataset_name
 
-        # Process dataset structure
-        self._process_structure(output_path)
+        # Process dataset structure with enforced split ratios
+        self._process_structure(
+            output_path, enforce_split_ratio=enforce_split_ratio, split_ratio=split_ratio)
 
         # Load processed data
         train_dataset = ImageFolder(
@@ -98,46 +101,186 @@ class DatasetHandler:
 
         return train_loader, val_loader, test_loader
 
-    def _process_structure(self, output_dir: Path):
-        """Process dataset according to its structure type"""
-        if self.structure_type == "class_based":
-            self._process_class_based(output_dir)
-        elif self.structure_type == "train_test":
-            self._process_train_test(output_dir)
-        elif self.structure_type == "train_valid_test":
-            self._process_train_valid_test(output_dir)
+    def _process_structure(self, output_dir: Path,
+                           enforce_split_ratio: bool = True,
+                           split_ratio: Tuple[float, float, float] = (0.8, 0.1, 0.1)):
+        """Process dataset according to its structure type with enforced split ratios"""
+        if enforce_split_ratio:
+            logging.info(
+                f"Enforcing {split_ratio[0]*100:.0f}/{split_ratio[1]*100:.0f}/{split_ratio[2]*100:.0f} train/val/test split ratio")
+            self._process_with_enforced_split(output_dir, split_ratio)
         else:
-            self._process_standard(output_dir)
+            # Use original processing methods based on structure type
+            if self.structure_type == "class_based":
+                self._process_class_based(output_dir)
+            elif self.structure_type == "train_test":
+                self._process_train_test(output_dir)
+            elif self.structure_type == "train_valid_test":
+                self._process_train_valid_test(output_dir)
+            else:
+                self._process_standard(output_dir)
 
-    def _get_image_properties(self, image_path: Path, is_processed: bool = False) -> Dict:
-        """Get image properties showing both original and processed states"""
-        with Image.open(image_path) as img:
-            original_size = img.size
-            original_channels = len(img.getbands())
-            original_bands = img.getbands()
+    def _process_with_enforced_split(self, output_dir: Path,
+                                     split_ratio: Tuple[float, float, float] = (0.8, 0.1, 0.1)):
+        """Process any dataset structure with enforced train/val/test split ratios"""
+        dataset_path = Path(self.config['data_dir']) / self.dataset_name
+        split_info = {'train': {}, 'val': {}, 'test': {}}
 
-            if is_processed:
-                return {
-                    'size': original_size,
-                    'channels': original_channels,
-                    'bands': original_bands
-                }
+        # First pass: collect all images by class
+        all_images_by_class = {}
 
-            # For original image, apply transforms to get processed properties
-            transformed_img = self.final_transforms['train'](img)
-            processed_shape = tuple(transformed_img.shape)
+        logging.info(
+            f"Processing {self.dataset_name} with enforced {split_ratio[0]*100:.0f}/{split_ratio[1]*100:.0f}/{split_ratio[2]*100:.0f} split")
 
-            return {
-                'original': {
-                    'size': original_size,
-                    'channels': original_channels,
-                    'bands': original_bands
-                },
-                'processed': {
-                    'shape': processed_shape,
-                    'channels': processed_shape[0],
-                }
-            }
+        # Handle different dataset structures for collection
+        if self.structure_type == "class_based":
+            # Get classes from structure configuration or auto-detect
+            classes = self.dataset_config.get(
+                'structure', {}).get('classes', [])
+            if not classes:
+                classes = [d.name for d in dataset_path.iterdir()
+                           if d.is_dir()]
+                logging.info(f"Auto-detected classes: {classes}")
+
+            for class_name in classes:
+                class_path = dataset_path / class_name
+                if not class_path.exists():
+                    logging.warning(f"Class directory not found: {class_path}")
+                    continue
+
+                images = [f for f in class_path.glob('*.*')
+                          if f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
+                          and not f.name.endswith('.xlsx')]
+
+                all_images_by_class[class_name] = images
+
+        elif self.structure_type in ["train_test", "train_valid_test", "standard"]:
+            # Collect images from all splits (train, val/valid, test)
+            dirs_to_check = []
+
+            if self.structure_type == "train_test":
+                structure = self.dataset_config.get('structure', {})
+                dirs_to_check = [dataset_path / structure.get('train', 'train'),
+                                 dataset_path / structure.get('test', 'test')]
+            elif self.structure_type == "train_valid_test":
+                dirs_to_check = [dataset_path / 'train',
+                                 dataset_path / 'valid',
+                                 dataset_path / 'test']
+            else:  # standard
+                dirs_to_check = [dataset_path / 'train',
+                                 dataset_path / 'val',
+                                 dataset_path / 'test']
+
+            # Find all classes across all splits
+            all_classes = set()
+            for split_dir in dirs_to_check:
+                if not split_dir.exists():
+                    continue
+                for class_dir in split_dir.iterdir():
+                    if class_dir.is_dir():
+                        all_classes.add(class_dir.name)
+
+            # Collect images from each class across all splits
+            for class_name in all_classes:
+                all_images_by_class[class_name] = []
+
+                for split_dir in dirs_to_check:
+                    if not split_dir.exists():
+                        continue
+
+                    class_dir = split_dir / class_name
+                    if not class_dir.exists():
+                        continue
+
+                    images = [f for f in class_dir.glob('*.*')
+                              if f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
+                              and not f.name.endswith('.xlsx')]
+
+                    all_images_by_class[class_name].extend(images)
+
+        # Second pass: create balanced splits for each class
+        for class_name, images in all_images_by_class.items():
+            if not images:
+                logging.warning(f"No images found for class: {class_name}")
+                continue
+
+            # Ensure reproducible splits with fixed random state
+            train_images, temp_images = train_test_split(
+                images,
+                train_size=split_ratio[0],
+                random_state=42
+            )
+
+            # Further split the remaining data into val and test
+            val_ratio = split_ratio[1] / (split_ratio[1] + split_ratio[2])
+            val_images, test_images = train_test_split(
+                temp_images,
+                train_size=val_ratio,
+                random_state=42
+            )
+
+            # Process and save each split
+            splits = [
+                ('train', train_images),
+                ('val', val_images),
+                ('test', test_images)
+            ]
+
+            for split_name, split_images in splits:
+                if not split_images:
+                    logging.warning(
+                        f"No images for {split_name} split in class {class_name}")
+                    continue
+
+                split_dir = output_dir / split_name
+                class_counts = self._copy_and_transform_files(
+                    split_images,
+                    split_dir,
+                    f"Processing {split_name} - {class_name}",
+                    mode=split_name
+                )
+
+                split_info[split_name].setdefault(
+                    'classes', {}).update(class_counts)
+                split_info[split_name]['total'] = sum(
+                    split_info[split_name]['classes'].values()
+                )
+
+        # Log dataset information
+        self._log_dataset_info(output_dir, split_info)
+        logging.info(
+            f"Completed processing {self.dataset_name} with enforced split ratio")
+
+    def _copy_and_transform_files(self, files, dest_dir: Path, desc: str, mode='train'):
+        """Copy files with standardized transformations"""
+        class_counts = {}
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        transform = self.final_transforms[mode]
+
+        for f in tqdm(files, desc=desc, unit='file'):
+            class_name = f.parent.name
+            dest_class_dir = dest_dir / class_name
+            dest_class_dir.mkdir(exist_ok=True)
+
+            # Load and transform image
+            with Image.open(f) as img:
+                # Always convert to RGB regardless of mode
+                # This ensures consistent channels across train/val/test
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+
+                # Apply transforms
+                transformed_img = transform(img)
+                # Convert tensor back to PIL for saving
+                transformed_img = transforms.ToPILImage()(transformed_img)
+                # Save with original name
+                transformed_img.save(dest_class_dir / f.name)
+
+            # Update class counts
+            class_counts[class_name] = class_counts.get(class_name, 0) + 1
+
+        return class_counts
 
     def _log_dataset_info(self, output_dir: Path, split_info: Dict):
         """Log dataset information to a file with both original and processed image properties"""
@@ -240,38 +383,37 @@ class DatasetHandler:
 
             f.write("=" * 50 + "\n")
 
-    def _copy_and_transform_files(self, files, dest_dir: Path, desc: str, mode='train'):
-        """Copy files with standardized transformations"""
-        class_counts = {}
-        dest_dir.mkdir(parents=True, exist_ok=True)
+    def _get_image_properties(self, image_path: Path, is_processed: bool = False) -> Dict:
+        """Get image properties showing both original and processed states"""
+        with Image.open(image_path) as img:
+            original_size = img.size
+            original_channels = len(img.getbands())
+            original_bands = img.getbands()
 
-        transform = self.final_transforms[mode]
+            if is_processed:
+                return {
+                    'size': original_size,
+                    'channels': original_channels,
+                    'bands': original_bands
+                }
 
-        for f in tqdm(files, desc=desc, unit='file'):
-            class_name = f.parent.name
-            dest_class_dir = dest_dir / class_name
-            dest_class_dir.mkdir(exist_ok=True)
+            # For original image, apply transforms to get processed properties
+            transformed_img = self.final_transforms['train'](img)
+            processed_shape = tuple(transformed_img.shape)
 
-            # Load and transform image
-            with Image.open(f) as img:
-                if img.mode == 'RGBA':
-                    # Convert RGBA to RGB
-                    img = img.convert('RGB')
-                # If conversion is requested, convert non-RGB images to RGB (3 channels)
-                if self.dataset_config.get("conversion", "") == "convert_to_3_channel" and img.mode != "RGB":
-                    img = img.convert("RGB")
-                # Apply transforms
-                transformed_img = transform(img)
-                # Convert tensor back to PIL for saving
-                transformed_img = transforms.ToPILImage()(transformed_img)
-                # Save with original name
-                transformed_img.save(dest_class_dir / f.name)
+            return {
+                'original': {
+                    'size': original_size,
+                    'channels': original_channels,
+                    'bands': original_bands
+                },
+                'processed': {
+                    'shape': processed_shape,
+                    'channels': processed_shape[0],
+                }
+            }
 
-            # Update class counts
-            class_counts[class_name] = class_counts.get(class_name, 0) + 1
-
-        return class_counts
-
+    # Keep the original methods for backwards compatibility
     def _process_class_based(self, output_dir: Path):
         """Handle datasets like tbcr with class-based structure"""
         dataset_path = Path(self.config['data_dir']) / self.dataset_name
