@@ -32,8 +32,27 @@ def setup_environment(args):
                 print(f"  {attr}: {getattr(props, attr)}")
         print()
 
-    # Set up logging
-    setup_logger('out/logger.txt')
+    # Set up logging with model-specific path when available
+    # For task_name, we always have this
+    # For dataset_name and model_name, we might have multiple or none, so handle appropriately
+    task_name = args.task_name
+
+    # Get the first dataset and model name when available
+    dataset_name = args.data[0] if hasattr(
+        args, 'data') and args.data else None
+
+    # For model name, combine arch and depth when available
+    model_name = None
+    if hasattr(args, 'arch') and args.arch and hasattr(args, 'depth'):
+        arch = args.arch[0]  # First architecture
+        # Get depth string representation for path
+        if isinstance(args.depth, dict) and arch in args.depth:
+            depth_value = str(args.depth[arch][0]) if args.depth[arch] else ""
+            model_name = f"{arch}_{depth_value}" if depth_value else arch
+
+    # Initialize the logger
+    setup_logger(task_name=task_name, dataset_name=dataset_name,
+                 model_name=model_name)
     logging.info("Main script started.")
 
 

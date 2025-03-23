@@ -492,7 +492,7 @@ class Trainer:
         # Configure early stopping
         min_epochs = getattr(self.args, 'min_epochs', 0)
         early_stopping_metric = getattr(
-            self.args, 'early_stopping_metric', 'f1')  # Default to f1
+            self.args, 'early_stopping_metric', 'loss')  # Default to loss instead of f1
         saved_attacks = False
 
         # Track best metrics
@@ -762,11 +762,15 @@ class Trainer:
         # After training complete, add final test results
         test_results = self.test()
         if self.adversarial:
-            test_loss, test_accuracy, adv_test_loss, adv_test_accuracy = test_results
-            self.tb_logger.log_test_results(
-                test_loss, test_accuracy, adv_test_loss, adv_test_accuracy)
+            test_loss, test_accuracy, detailed_metrics = test_results[:3]
+            if len(test_results) > 3:
+                adv_test_loss, adv_test_accuracy = test_results[3:]
+                self.tb_logger.log_test_results(
+                    test_loss, test_accuracy, adv_test_loss, adv_test_accuracy)
+            else:
+                self.tb_logger.log_test_results(test_loss, test_accuracy)
         else:
-            test_loss, test_accuracy = test_results
+            test_loss, test_accuracy, detailed_metrics = test_results
             self.tb_logger.log_test_results(test_loss, test_accuracy)
 
         # After training complete, log best metrics
@@ -1302,16 +1306,25 @@ class TrainingManager:
 
                     # Handle both normal and adversarial test results
                     if self.args.adversarial:
-                        test_loss, test_accuracy, adv_test_loss, adv_test_accuracy = trainer.test()
-                        logging.info(
-                            f"Test results for {model_name}:\n"
-                            f"Clean  - Loss: {test_loss:.4f}, Accuracy: {test_accuracy:.4f}\n"
-                            f"Advers - Loss: {adv_test_loss:.4f}, Accuracy: {adv_test_accuracy:.4f}"
-                        )
+                        test_result = trainer.test()
+                        test_loss, test_accuracy, detailed_metrics = test_result[:3]
+                        if len(test_result) > 3:  # Handle case where adv metrics are returned
+                            adv_test_loss, adv_test_accuracy = test_result[3:]
+                            logging.info(
+                                f"Test results for {model_name}:\n"
+                                f"Clean  - Loss: {test_loss:.4f}, Accuracy: {test_accuracy:.4f}, F1: {detailed_metrics.get('f1', 0):.4f}\n"
+                                f"Advers - Loss: {adv_test_loss:.4f}, Accuracy: {adv_test_accuracy:.4f}"
+                            )
+                        else:
+                            logging.info(
+                                f"Test results for {model_name}:\n"
+                                f"Clean  - Loss: {test_loss:.4f}, Accuracy: {test_accuracy:.4f}, F1: {detailed_metrics.get('f1', 0):.4f}"
+                            )
                     else:
-                        test_loss, test_accuracy = trainer.test()
+                        test_loss, test_accuracy, detailed_metrics = trainer.test()
                         logging.info(
-                            f"Test results for {model_name}: Loss={test_loss:.4f}, Accuracy={test_accuracy:.4f}"
+                            f"Test results for {model_name}: Loss={test_loss:.4f}, Accuracy={test_accuracy:.4f}, "
+                            f"F1={detailed_metrics.get('f1', 0):.4f}"
                         )
 
             except Exception as e:

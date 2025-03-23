@@ -248,7 +248,7 @@ python main.py --data chest_xray --arch resnet --loss_type dynamic --focal_alpha
 ```bash
 # Tensorboard
 
-tensorboard --logdir=runs
+tensorboard --logdir=out/runs
 
 
 ```
@@ -262,9 +262,14 @@ python main.py --data chest_xray --task_name normal_training --loss_type weighte
 python main.py --data chest_xray --task_name normal_training --loss_type weighted --epochs 100 --train_batch 16 --lr 0.0001 --drop 0.2 --gpu-ids 0 --arch meddef1 --depth '{"meddef1": ["1.0"]}' --pin_memory --weight_decay 1e-4 --early_stopping_metric accuracy
 
 
-
+python main.py --data ccts --task_name normal_training --epochs 100 --train_batch 16 --lr 0.0001 --drop 0.2 --gpu-ids 0 --arch meddef1 --depth '{"meddef1": ["1.0"]}' --pin_memory --weight_decay 1e-4
 
 ### Data preprocessing
 python dataset_processing.py --datasets chest_xray --enforce_split --train_split 0.8 --val_split 0.1 --test_split 0.1
 
+
+python dataset_processing.py --datasets ccts --enforce_split --train_split 0.8 --val_split 0.1 --test_split 0.1
+
+
 ```
+

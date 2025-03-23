@@ -78,9 +78,9 @@ def parse_args(mode='train'):
                             help='Patience for early stopping (max 20)')
         parser.add_argument('--min_epochs', type=int, default=0,
                             help='Minimum epochs to train regardless of early stopping')
-        parser.add_argument('--early_stopping_metric', type=str, default='f1', 
-                    choices=['loss', 'accuracy', 'f1', 'balanced_acc'],
-                    help='Metric to monitor for early stopping')
+        parser.add_argument('--early_stopping_metric', type=str, default='loss',
+                            choices=['loss', 'accuracy', 'f1', 'balanced_acc'],
+                            help='Metric to monitor for early stopping')
 
         # Regularization parameters
         parser.add_argument('--drop', type=float, default=0.3,
