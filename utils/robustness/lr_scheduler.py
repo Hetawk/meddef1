@@ -2,78 +2,77 @@
 
 import torch.optim.lr_scheduler as lr_scheduler
 import logging
-import math
 
 
 class LRSchedulerLoader:
+    """
+    Loads appropriate learning rate scheduler based on configuration
+    """
+
     def __init__(self):
-        self.schedulers = {
-            'StepLR': lr_scheduler.StepLR,
-            'ExponentialLR': lr_scheduler.ExponentialLR,
-            'ReduceLROnPlateau': lr_scheduler.ReduceLROnPlateau,
-            'CosineAnnealingLR': lr_scheduler.CosineAnnealingLR,
-            'CosineAnnealingWarmRestarts': lr_scheduler.CosineAnnealingWarmRestarts,
-            'OneCycleLR': lr_scheduler.OneCycleLR,
-        }
-        logging.info(
-            f"LRSchedulerLoader initialized with schedulers: {', '.join(self.schedulers.keys())}")
+        """Initialize the scheduler loader"""
+        logging.info("LRSchedulerLoader initialized with schedulers: StepLR, ExponentialLR, ReduceLROnPlateau, CosineAnnealingLR, CosineAnnealingWarmRestarts, OneCycleLR")
 
-    def get_scheduler(self, optimizer, args):
-        # Get scheduler name from args or use default
-        scheduler_name = getattr(args, 'scheduler', 'StepLR')
+    def get_scheduler(self, optimizer, scheduler='StepLR', config=None):
+        """
+        Get scheduler based on name
 
-        # Handle the case when scheduler is explicitly set to None
-        if scheduler_name == 'none' or scheduler_name is None:
-            logging.info("No scheduler will be used")
+        Args:
+            optimizer: PyTorch optimizer
+            scheduler: Name of scheduler (StepLR, ExponentialLR, etc.)
+            config: Configuration object with scheduler parameters
+
+        Returns:
+            PyTorch scheduler
+        """
+        if config is None:
+            config = {}
+
+        # Extract parameters with defaults
+        step_size = getattr(config, 'lr_step', 30)
+        gamma = getattr(config, 'lr_gamma', 0.1)
+        patience = getattr(config, 'lr_patience', 10)
+        min_lr = getattr(config, 'min_lr', 1e-6)
+        t_max = getattr(config, 'epochs', 100)
+
+        scheduler = scheduler.lower() if isinstance(scheduler, str) else 'steplr'
+
+        if scheduler == 'steplr':
+            return lr_scheduler.StepLR(
+                optimizer, step_size=step_size, gamma=gamma
+            )
+        elif scheduler == 'exponentiallr':
+            return lr_scheduler.ExponentialLR(
+                optimizer, gamma=gamma
+            )
+        elif scheduler == 'reducelronplateau':
+            return lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', factor=gamma,
+                patience=patience, min_lr=min_lr, verbose=True
+            )
+        elif scheduler == 'cosineannealinglr':
+            return lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=t_max, eta_min=min_lr
+            )
+        elif scheduler == 'cosineannealingwarmrestarts':
+            return lr_scheduler.CosineAnnealingWarmRestarts(
+                optimizer, T_0=step_size, T_mult=1, eta_min=min_lr
+            )
+        elif scheduler == 'onecyclelr':
+            steps_per_epoch = getattr(config, 'steps_per_epoch', 100)
+            return lr_scheduler.OneCycleLR(
+                optimizer, max_lr=getattr(config, 'lr', 0.001) * 10,
+                steps_per_epoch=steps_per_epoch, epochs=t_max
+            )
+        else:
+            logging.warning(
+                f"Unknown scheduler {scheduler}, not using any scheduler")
             return None
 
-        if scheduler_name not in self.schedulers:
-            logging.warning(
-                f"Scheduler {scheduler_name} not found, using StepLR")
-            scheduler_name = 'StepLR'
+# For backward compatibility
 
-        scheduler_class = self.schedulers[scheduler_name]
 
-        # Configure scheduler based on type
-        if scheduler_name == 'StepLR':
-            return scheduler_class(
-                optimizer,
-                step_size=getattr(args, 'lr_step', 30),
-                gamma=getattr(args, 'lr_gamma', 0.1)
-            )
-        elif scheduler_name == 'ExponentialLR':
-            return scheduler_class(
-                optimizer,
-                gamma=getattr(args, 'lr_gamma', 0.95)
-            )
-        elif scheduler_name == 'ReduceLROnPlateau':
-            return scheduler_class(
-                optimizer,
-                mode='min',
-                factor=getattr(args, 'lr_gamma', 0.1),
-                patience=getattr(args, 'lr_patience', 10),
-                verbose=True
-            )
-        elif scheduler_name == 'CosineAnnealingLR':
-            return scheduler_class(
-                optimizer,
-                T_max=getattr(args, 'epochs', 100),
-                eta_min=getattr(args, 'min_lr', 1e-6)
-            )
-        elif scheduler_name == 'CosineAnnealingWarmRestarts':
-            return scheduler_class(
-                optimizer,
-                T_0=getattr(args, 'cycle_length', 10),
-                T_mult=getattr(args, 'cycle_mult', 1),
-                eta_min=getattr(args, 'min_lr', 1e-6)
-            )
-        elif scheduler_name == 'OneCycleLR':
-            return scheduler_class(
-                optimizer,
-                max_lr=getattr(args, 'max_lr', args.lr * 10),
-                total_steps=getattr(args, 'epochs', 100) *
-                len(getattr(args, 'train_loader', 100)),
-                pct_start=getattr(args, 'pct_start', 0.3),
-                div_factor=getattr(args, 'div_factor', 25),
-                final_div_factor=getattr(args, 'final_div_factor', 10000)
-            )
+def get_scheduler(optimizer, scheduler='StepLR', config=None):
+    """Function version of LRSchedulerLoader.get_scheduler for backward compatibility"""
+    loader = LRSchedulerLoader()
+    return loader.get_scheduler(optimizer, scheduler, config)

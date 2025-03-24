@@ -26,12 +26,11 @@ class TaskHandler:
             getattr(args, 'fp16', False)
         )
 
-    def run_train(self):
-       # "task_name normal_training"
+    def run_train(self, run_test=False):
         """Handle normal training workflow"""
         logging.info("Starting normal training task")
         for dataset_name in self.args.data:
-            self.training_manager.train_dataset(dataset_name)
+            self.training_manager.train_dataset(dataset_name, run_test)
 
     def run_attack(self):
         """Generate adversarial examples for a dataset"""
@@ -281,14 +280,13 @@ class TaskHandler:
             model.eval()
             logging.info(f"Loaded model weights from {self.args.model_path}")
 
-        
         prune_rate = getattr(self.args, "prune_rate", 0.3)
         pruner = Pruner(model, prune_rate)
         pruned_model = pruner.unstructured_prune()
         logging.info("Model pruning completed.")
 
         # Instantiate a Trainer (which has a test() method) for evaluation
-        
+
         trainer = Trainer(
             model=pruned_model,
             train_loader=test_loader,  # dummy loader for Trainer interface

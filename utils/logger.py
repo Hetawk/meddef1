@@ -47,7 +47,8 @@ def setup_logger(log_file=None, task_name=None, dataset_name=None, model_name=No
     f_handler.setLevel(logging.INFO)
 
     # Create formatters and add them to handlers
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    # Remove timestamp (%(asctime)s) from the format
+    formatter = logging.Formatter('%(levelname)s - %(message)s')
     c_handler.setFormatter(formatter)
     f_handler.setFormatter(formatter)
 

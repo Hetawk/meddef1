@@ -50,7 +50,7 @@ def setup_environment(args):
             depth_value = str(args.depth[arch][0]) if args.depth[arch] else ""
             model_name = f"{arch}_{depth_value}" if depth_value else arch
 
-    # Initialize the logger
+    # Initialize the logger without timestamps
     setup_logger(task_name=task_name, dataset_name=dataset_name,
                  model_name=model_name)
     logging.info("Main script started.")
@@ -72,7 +72,9 @@ def main():
 
     # Execute task based on task_name
     if args.task_name == 'normal_training':
-        task_handler.run_train()
+        # Add quick_test_after_training flag to arguments
+        run_test = getattr(args, 'quick_test_after_training', False)
+        task_handler.run_train(run_test)
     elif args.task_name == 'attack':
         task_handler.run_attack()
     elif args.task_name == 'defense':

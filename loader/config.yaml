@@ -36,7 +36,7 @@ data:
         std: [0.08040085, 0.10757149, 0.12017569]
       augmentation:
         contrast_enhancement: true
-        brightness_adjustment: false 
+        brightness_adjustment: false
       class_balancing: weighted_loss # Added due to severe class imbalance (ratio: 6.00)
       duplicate_removal: true
       structure:
@@ -67,11 +67,23 @@ data:
         train: "train"
         valid: "valid"
         test: "test"
+        type: "train_valid_test"
+      class_normalization:
+        # Define rules for normalizing class names
+        patterns:
+          # Pattern-based replacement (regex)
+          "^(adenocarcinoma).*": "adenocarcinoma"
+          "^(large\\.cell\\.carcinoma).*": "large.cell.carcinoma"
+          "^(squamous\\.cell\\.carcinoma).*": "squamous.cell.carcinoma"
+        # Optional direct mappings for specific cases
+        mapping:
+          "adenocarcinoma_left.lower.lobe_T2_N0_M0_Ib": "adenocarcinoma"
+          "large.cell.carcinoma_left.hilum_T2_N2_M0_IIIa": "large.cell.carcinoma"
+          "squamous.cell.carcinoma_left.hilum_T1_N2_M0_IIIa": "squamous.cell.carcinoma"
       training:
-        epochs: 2
-        batch_size: 32
-        lr: 0.001
-        optimizer: adam # Change to adam
+        epochs: 30
+        batch_size: 64
+        lr: 0.0001
         momentum: 0.9
         weight_decay: 1e-4
       augmentation:

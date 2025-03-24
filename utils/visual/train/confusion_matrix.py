@@ -44,24 +44,50 @@ def plot_confusion_matrix(
             'abbreviated' - show abbreviated class names
             'numeric' - show numeric indices
     """
-    # Ensure inputs are numpy arrays
-    true_labels = np.array(true_labels)
-    predictions = np.array(predictions)
+    # Validate inputs
+    if true_labels is None or predictions is None:
+        logging.warning(
+            "Empty true_labels or predictions passed to plot_confusion_matrix")
+        return []
 
-    # Calculate confusion matrix
-    cm = confusion_matrix(true_labels, predictions)
+    # Ensure inputs are numpy arrays and have the same shape
+    true_labels = np.array(true_labels).flatten()
+    predictions = np.array(predictions).flatten()
+
+    if len(true_labels) == 0 or len(predictions) == 0:
+        logging.warning("Empty arrays passed to plot_confusion_matrix")
+        return []
+
+    if len(true_labels) != len(predictions):
+        logging.warning(
+            f"Mismatched array lengths: true_labels ({len(true_labels)}) vs predictions ({len(predictions)})")
+        return []
+
+    # Get unique classes from both arrays to ensure consistency
+    unique_classes = np.unique(np.concatenate((true_labels, predictions)))
+
+    if len(unique_classes) <= 1:
+        logging.warning("Cannot create confusion matrix with only one class")
+        return []
+
+    # Calculate confusion matrix with explicit labels to avoid issues
+    try:
+        cm = confusion_matrix(true_labels, predictions, labels=unique_classes)
+    except Exception as e:
+        logging.error(f"Error calculating confusion matrix: {e}")
+        return []
 
     # Handle class names based on display mode
     if display_mode == 'numeric':
         display_labels = [str(i) for i in range(cm.shape[0])]
     else:
-        if class_names is None:
-            class_names = [f"Class {i}" for i in range(cm.shape[0])]
-
-        if display_mode == 'abbreviated':
-            display_labels = [format_class_name(name) for name in class_names]
+        if class_names is None or len(class_names) < len(unique_classes):
+            display_labels = [f"Class {i}" for i in unique_classes]
+        elif display_mode == 'abbreviated':
+            display_labels = [format_class_name(
+                class_names[i]) for i in unique_classes]
         else:  # 'full'
-            display_labels = class_names
+            display_labels = [class_names[i] for i in unique_classes]
 
     # Create figures
     titles_options = [
@@ -71,38 +97,48 @@ def plot_confusion_matrix(
 
     figs = []
     for title, normalize in titles_options:
-        fig, ax = plt.subplots(figsize=fig_size)
+        try:
+            fig, ax = plt.subplots(figsize=fig_size)
 
-        # Create ConfusionMatrixDisplay
-        disp = ConfusionMatrixDisplay(
-            confusion_matrix=cm,
-            display_labels=display_labels
-        )
+            # Create ConfusionMatrixDisplay directly with our data
+            disp = ConfusionMatrixDisplay(
+                confusion_matrix=cm,
+                display_labels=display_labels
+            )
 
-        # Plot with enhanced visibility
-        disp.plot(
-            cmap='Blues',
-            ax=ax,
-            values_format='.2f' if normalize else 'd',
-            xticks_rotation=45,
-            im_kw={'interpolation': 'nearest'}
-        )
+            # Plot with enhanced visibility and error handling
+            norm_cm = cm.astype(
+                'float') / cm.sum(axis=1)[:, np.newaxis] if normalize else cm
 
-        # Adjust layout for readability
-        plt.title(title, pad=20)
+            # Manually set vmin and vmax to avoid the "zero-size array" error
+            vmin = 0
+            vmax = norm_cm.max() if normalize else cm.max()
+            if vmax == 0:
+                vmax = 1  # Default if all values are 0
 
-        # Add spacing for long labels
-        plt.subplots_adjust(bottom=0.2)
+            # Plot with explicit vmin/vmax
+            disp.plot(
+                cmap='Blues',
+                ax=ax,
+                values_format='.2f' if normalize else 'd',
+                xticks_rotation=45,
+                im_kw={'interpolation': 'nearest', 'vmin': vmin, 'vmax': vmax}
+            )
 
-        # Add grid for better readability
-        ax.grid(False)
+            # Adjust layout for readability
+            plt.title(title, pad=20)
+            plt.subplots_adjust(bottom=0.2)
+            ax.grid(False)
 
-        # Enhance text visibility
-        for text in ax.texts:
-            text.set_fontsize(8)  # Adjust cell text size
+            # Enhance text visibility
+            for text in ax.texts:
+                text.set_fontsize(8)
 
-        plt.tight_layout()
-        figs.append(fig)
+            plt.tight_layout()
+            figs.append(fig)
+        except Exception as e:
+            logging.error(f"Error plotting confusion matrix: {e}")
+            plt.close()  # Close any partial figure
 
     return figs
 
@@ -120,12 +156,28 @@ def save_confusion_matrix(models, true_labels_dict, predictions_dict, class_name
         os.makedirs(output_dir, exist_ok=True)
 
         try:
+            if model_name not in true_labels_dict or model_name not in predictions_dict:
+                logging.warning(f"Missing data for model {model_name}")
+                continue
+
+            true_labels = true_labels_dict[model_name]
+            predictions = predictions_dict[model_name]
+
+            # Check if labels and predictions are valid
+            if not isinstance(true_labels, (list, np.ndarray)) or not isinstance(predictions, (list, np.ndarray)):
+                logging.warning(f"Invalid data types for model {model_name}")
+                continue
+
+            if len(true_labels) == 0 or len(predictions) == 0:
+                logging.warning(f"Empty data for model {model_name}")
+                continue
+
             # Generate all display modes
             for mode in display_modes:
                 figs = plot_confusion_matrix(
                     model_name=model_name,
-                    true_labels=true_labels_dict[model_name],
-                    predictions=predictions_dict[model_name],
+                    true_labels=true_labels,
+                    predictions=predictions,
                     class_names=class_names,
                     dataset_name=dataset_name,
                     display_mode=mode
@@ -142,3 +194,4 @@ def save_confusion_matrix(models, true_labels_dict, predictions_dict, class_name
         except Exception as e:
             logging.error(
                 f"Error generating confusion matrix for {model_name}: {e}")
+            plt.close('all')  # Clean up any open figures on error

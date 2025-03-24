@@ -13,6 +13,7 @@ from tqdm import tqdm
 from .preprocessing import build_transforms, check_for_corrupted_images, get_default_transforms
 from PIL import Image
 import numpy as np
+import re
 
 
 class DatasetHandler:
@@ -120,6 +121,86 @@ class DatasetHandler:
             else:
                 self._process_standard(output_dir)
 
+    def _normalize_class_name(self, class_name: str) -> str:
+        """
+        Normalize class names by extracting the base class name.
+        e.g., "adenocarcinoma_left.lower.lobe_T2_N0_M0_Ib" -> "adenocarcinoma"
+
+        Rules:
+        1. Use dataset-specific rules defined in config if available
+        2. Otherwise, use general rules:
+           - Split on first underscore or dot
+           - Use predefined mappings if available
+        """
+        # Check if there's a specific normalization rule for this dataset
+        if 'class_normalization' in self.dataset_config:
+            norm_rules = self.dataset_config['class_normalization']
+
+            # Direct mapping if available
+            if 'mapping' in norm_rules and class_name in norm_rules['mapping']:
+                return norm_rules['mapping'][class_name]
+
+            # Pattern-based replacement
+            if 'patterns' in norm_rules:
+                for pattern, replacement in norm_rules['patterns'].items():
+                    if re.search(pattern, class_name):
+                        return re.sub(pattern, replacement, class_name)
+
+            # Delimiter-based splitting
+            if 'delimiter' in norm_rules:
+                delimiter = norm_rules['delimiter']
+                return class_name.split(delimiter)[0]
+
+        # General fallback rules
+
+        # For CCTS dataset format like "adenocarcinoma_left.lower.lobe_T2_N0_M0_Ib"
+        if '_' in class_name:
+            return class_name.split('_')[0]
+
+        # For names with dots like "large.cell.carcinoma"
+        # Keep the full name with dots as it may be a compound class name
+
+        return class_name
+
+    def _copy_and_transform_files(self, files, dest_dir: Path, desc: str, mode='train'):
+        """Copy files with standardized transformations"""
+        class_counts = {}
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        transform = self.final_transforms[mode]
+
+        for f in tqdm(files, desc=desc, unit='file'):
+            # Get the original class name (parent directory name)
+            original_class_name = f.parent.name
+
+            # Normalize the class name for consistency
+            normalized_class_name = self._normalize_class_name(
+                original_class_name)
+
+            # Use the normalized class name for the destination directory
+            dest_class_dir = dest_dir / normalized_class_name
+            dest_class_dir.mkdir(exist_ok=True)
+
+            # Load and transform image
+            with Image.open(f) as img:
+                # Always convert to RGB regardless of mode
+                # This ensures consistent channels across train/val/test
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+
+                # Apply transforms
+                transformed_img = transform(img)
+                # Convert tensor back to PIL for saving
+                transformed_img = transforms.ToPILImage()(transformed_img)
+                # Save with original name
+                transformed_img.save(dest_class_dir / f.name)
+
+            # Update class counts with normalized class name
+            class_counts[normalized_class_name] = class_counts.get(
+                normalized_class_name, 0) + 1
+
+        return class_counts
+
     def _process_with_enforced_split(self, output_dir: Path,
                                      split_ratio: Tuple[float, float, float] = (0.8, 0.1, 0.1)):
         """Process any dataset structure with enforced train/val/test split ratios"""
@@ -171,32 +252,48 @@ class DatasetHandler:
                                  dataset_path / 'val',
                                  dataset_path / 'test']
 
-            # Find all classes across all splits
+            # Find all classes across all splits, using normalized class names
             all_classes = set()
+            normalized_class_mapping = {}  # Maps original dir names to normalized class names
+
             for split_dir in dirs_to_check:
                 if not split_dir.exists():
                     continue
                 for class_dir in split_dir.iterdir():
                     if class_dir.is_dir():
-                        all_classes.add(class_dir.name)
+                        normalized_class_name = self._normalize_class_name(
+                            class_dir.name)
+                        all_classes.add(normalized_class_name)
+                        normalized_class_mapping[class_dir.name] = normalized_class_name
+
+            # Log class normalization info
+            if len(normalized_class_mapping) > len(all_classes):
+                logging.info(
+                    f"Normalized {len(normalized_class_mapping)} class directories to {len(all_classes)} unique classes")
+                for orig, norm in normalized_class_mapping.items():
+                    if orig != norm:
+                        logging.info(f"  Mapped '{orig}' → '{norm}'")
 
             # Collect images from each class across all splits
-            for class_name in all_classes:
-                all_images_by_class[class_name] = []
+            for normalized_class_name in all_classes:
+                all_images_by_class[normalized_class_name] = []
 
-                for split_dir in dirs_to_check:
-                    if not split_dir.exists():
-                        continue
+            # Now collect images using the mapping
+            for split_dir in dirs_to_check:
+                if not split_dir.exists():
+                    continue
 
-                    class_dir = split_dir / class_name
-                    if not class_dir.exists():
-                        continue
+                for class_dir in split_dir.iterdir():
+                    if class_dir.is_dir():
+                        normalized_class_name = normalized_class_mapping.get(
+                            class_dir.name, class_dir.name)
 
-                    images = [f for f in class_dir.glob('*.*')
-                              if f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
-                              and not f.name.endswith('.xlsx')]
+                        images = [f for f in class_dir.glob('*.*')
+                                  if f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.tif', '.tiff')
+                                  and not f.name.endswith('.xlsx')]
 
-                    all_images_by_class[class_name].extend(images)
+                        all_images_by_class[normalized_class_name].extend(
+                            images)
 
         # Second pass: create balanced splits for each class
         for class_name, images in all_images_by_class.items():
@@ -250,37 +347,6 @@ class DatasetHandler:
         self._log_dataset_info(output_dir, split_info)
         logging.info(
             f"Completed processing {self.dataset_name} with enforced split ratio")
-
-    def _copy_and_transform_files(self, files, dest_dir: Path, desc: str, mode='train'):
-        """Copy files with standardized transformations"""
-        class_counts = {}
-        dest_dir.mkdir(parents=True, exist_ok=True)
-
-        transform = self.final_transforms[mode]
-
-        for f in tqdm(files, desc=desc, unit='file'):
-            class_name = f.parent.name
-            dest_class_dir = dest_dir / class_name
-            dest_class_dir.mkdir(exist_ok=True)
-
-            # Load and transform image
-            with Image.open(f) as img:
-                # Always convert to RGB regardless of mode
-                # This ensures consistent channels across train/val/test
-                if img.mode != "RGB":
-                    img = img.convert("RGB")
-
-                # Apply transforms
-                transformed_img = transform(img)
-                # Convert tensor back to PIL for saving
-                transformed_img = transforms.ToPILImage()(transformed_img)
-                # Save with original name
-                transformed_img.save(dest_class_dir / f.name)
-
-            # Update class counts
-            class_counts[class_name] = class_counts.get(class_name, 0) + 1
-
-        return class_counts
 
     def _log_dataset_info(self, output_dir: Path, split_info: Dict):
         """Log dataset information to a file with both original and processed image properties"""
@@ -575,6 +641,9 @@ class DatasetHandler:
             'test': 'test'
         }
 
+        # Track class name normalization for logging
+        normalized_class_mapping = {}
+
         for src_name, dst_name in dir_mapping.items():
             src_dir = dataset_path / src_name
             if src_dir.exists():
@@ -584,6 +653,12 @@ class DatasetHandler:
 
                 for class_dir in tqdm(src_dir.iterdir(), desc=f"Processing {src_name}", total=total_classes):
                     if class_dir.is_dir():
+                        # Track normalization for logging
+                        normalized_name = self._normalize_class_name(
+                            class_dir.name)
+                        if class_dir.name != normalized_name:
+                            normalized_class_mapping[class_dir.name] = normalized_name
+
                         counts = self._copy_and_transform_files(
                             list(class_dir.glob('*.*')),
                             output_dir / dst_name,
@@ -594,6 +669,13 @@ class DatasetHandler:
                             'classes', {}).update(counts)
                         split_info[dst_name]['total'] = sum(
                             split_info[dst_name]['classes'].values())
+
+        # Log normalization results
+        if normalized_class_mapping:
+            logging.info(
+                f"Normalized {len(normalized_class_mapping)} class directories:")
+            for orig, norm in normalized_class_mapping.items():
+                logging.info(f"  Mapped '{orig}' → '{norm}'")
 
         # Log dataset information
         self._log_dataset_info(output_dir, split_info)

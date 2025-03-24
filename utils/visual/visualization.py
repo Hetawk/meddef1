@@ -12,8 +12,9 @@ from .train.confusion_matrix import save_confusion_matrix
 from .train.class_distribution import save_class_distribution
 from .attack.perturbation_visualization import save_perturbation_visualization
 from .attack.adversarial_examples import save_adversarial_examples
-import seaborn as sns
-import pandas as pd
+# Import the new visualization modules
+from .train.per_class_metrics import save_per_class_metrics
+from .train.threshold_optimization import save_threshold_optimization
 from datetime import datetime
 import logging
 import os
@@ -27,7 +28,7 @@ backend = configure_matplotlib_backend()
 
 class Visualization:
     def __init__(self):
-        # Log the backend being used
+        # Log the backend being used but without timestamp
         logging.info(f"Using matplotlib backend: {backend}")
         self.figure_handles = []  # Keep track of figure handles
 
@@ -137,3 +138,77 @@ class Visualization:
             logging.error(f"Error in adversarial visualization: {e}")
             # Close any open figures
             plt.close('all')
+
+    # New method to visualize metrics from train.py
+    def visualize_metrics(self, metrics, task_name, dataset_name, model_name, phase="train", epoch=None, class_names=None):
+        """
+        Create and save visualizations for metrics
+
+        Args:
+            metrics: Dictionary containing metrics
+            task_name: Name of the task
+            dataset_name: Name of the dataset
+            model_name: Name of the model
+            phase: Phase (train/val/test)
+            epoch: Current epoch number (optional)
+            class_names: List of class names (optional)
+        """
+        # Only create visualizations periodically if epoch is provided
+        if epoch is not None and epoch % 10 != 0 and epoch != getattr(self, 'epochs', 0) - 1:
+            return
+
+        try:
+            # Create confusion matrix if metrics include it
+            if 'confusion_matrix' in metrics:
+                cm = np.array(metrics['confusion_matrix'])
+                true_labels = metrics.get('true_labels', [])
+                predictions = metrics.get('predictions', [])
+
+                # Use existing confusion matrix function
+                save_confusion_matrix(
+                    [model_name],
+                    {model_name: true_labels},
+                    {model_name: predictions},
+                    class_names,
+                    task_name,
+                    dataset_name
+                )
+
+            # Create per-class metrics visualization
+            if 'per_class' in metrics:
+                save_per_class_metrics(
+                    metrics,
+                    task_name,
+                    dataset_name,
+                    model_name,
+                    phase=phase,
+                    epoch=epoch,
+                    class_names=class_names
+                )
+
+        except Exception as e:
+            logging.warning(f"Failed to create visualization: {e}")
+            plt.close('all')  # Close any open figures on error
+
+    # New method for threshold optimization curves
+    def create_threshold_curve(self, true_labels, probabilities, task_name, dataset_name, model_name):
+        """
+        Create and save threshold optimization curves for binary classification
+
+        Args:
+            true_labels: Ground truth labels
+            probabilities: Predicted probabilities
+            task_name: Name of the task
+            dataset_name: Name of the dataset
+            model_name: Name of the model
+
+        Returns:
+            Best threshold value
+        """
+        return save_threshold_optimization(
+            true_labels,
+            probabilities,
+            task_name,
+            dataset_name,
+            model_name
+        )

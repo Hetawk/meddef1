@@ -22,15 +22,30 @@ class AdversarialTraining:
         if not hasattr(config, 'epsilon'):
             config.epsilon = getattr(config, 'attack_eps', 0.3)
 
+        # Initialize epsilon scheduling parameters
+        self.initial_epsilon = getattr(
+            config, 'initial_epsilon', config.epsilon / 3)
+        self.epsilon = self.initial_epsilon  # Start with smaller epsilon
+        self.final_epsilon = config.epsilon
+        self.epsilon_steps = getattr(config, 'epsilon_steps', 5)
+        self.current_step = 0
+
+        # Initialize adv weight scheduling parameters
+        self.initial_adv_weight = getattr(config, 'initial_adv_weight', 0.2)
+        self.adv_weight = self.initial_adv_weight
+        self.final_adv_weight = getattr(config, 'adv_weight', 0.5)
+
         # Initialize the attack using AttackLoader
         self.attack_loader = AttackLoader(model, config)
         self.attack = self.attack_loader.get_attack(config.attack_name)
-        
+
         # Log the attack type(s) being used
         if isinstance(config.attack_name, list):
-            logging.info(f"Setting up adversarial training with attacks: {', '.join(config.attack_name)}")
+            logging.info(
+                f"Setting up adversarial training with attacks: {', '.join(config.attack_name)}")
         else:
-            logging.info(f"Setting up adversarial training with attack: {config.attack_name}")
+            logging.info(
+                f"Setting up adversarial training with attack: {config.attack_name}")
 
         if self.attack is None:
             raise ValueError(
@@ -58,8 +73,40 @@ class AdversarialTraining:
         self.batch_size = getattr(config, 'train_batch', 32)
         self.max_samples_in_memory = 1000  # Adjust based on available GPU memory
 
+        # Print key parameters
+        logging.info(f"Adversarial training initialized with:")
+        logging.info(f" - Initial epsilon: {self.initial_epsilon}")
+        logging.info(f" - Final epsilon: {self.final_epsilon}")
+        logging.info(f" - Epsilon schedule over {self.epsilon_steps} epochs")
+        logging.info(f" - Initial adv weight: {self.initial_adv_weight}")
+        logging.info(f" - Final adv weight: {self.final_adv_weight}")
+
+    def update_parameters(self, epoch):
+        """Update epsilon and adv_weight according to schedule"""
+        if epoch < self.epsilon_steps:
+            # Gradually increase epsilon from initial to final
+            progress = epoch / self.epsilon_steps
+            self.epsilon = self.initial_epsilon + \
+                (self.final_epsilon - self.initial_epsilon) * progress
+            self.adv_weight = self.initial_adv_weight + \
+                (self.final_adv_weight - self.initial_adv_weight) * progress
+            logging.info(
+                f"Epoch {epoch+1}: Updated adversarial parameters - epsilon={self.epsilon:.4f}, adv_weight={self.adv_weight:.4f}")
+        elif epoch == self.epsilon_steps:
+            # Final values
+            self.epsilon = self.final_epsilon
+            self.adv_weight = self.final_adv_weight
+            logging.info(
+                f"Epoch {epoch+1}: Reached final adversarial parameters - epsilon={self.epsilon:.4f}, adv_weight={self.adv_weight:.4f}")
+
     def adversarial_loss(self, data, target, batch_indices=None):
         try:
+            # Existing code remains the same
+
+            # But use the current epsilon value which may be changing per-epoch
+            if hasattr(self.attack, 'epsilon'):
+                self.attack.epsilon = self.epsilon
+
             if self.use_pregenerated and batch_indices is not None:
                 # Ensure batch_indices is a tensor
                 if not isinstance(batch_indices, torch.Tensor):
@@ -185,18 +232,19 @@ class AdversarialTraining:
         try:
             # Determine folder structure similar to Trainer.save_model
             task = getattr(self.config, 'task_name', 'default_task')
-            
+
             # Handle dataset name properly - convert list to string if needed
             if hasattr(self.config, 'data_key'):
                 dataset = self.config.data_key
             elif hasattr(self.config, 'data'):
                 if isinstance(self.config.data, list):
-                    dataset = self.config.data[0]  # Take first dataset if it's a list
+                    # Take first dataset if it's a list
+                    dataset = self.config.data[0]
                 else:
                     dataset = self.config.data
             else:
                 dataset = 'default_dataset'
-                
+
             # Handle model name
             if hasattr(self.config, 'model_name'):
                 model_name = self.config.model_name
@@ -213,17 +261,18 @@ class AdversarialTraining:
                 model_name = f"{arch}_{depth_val}" if depth_val is not None else self.model.__class__.__name__
             else:
                 model_name = self.model.__class__.__name__
-                
+
             # Handle attack name - convert list to string if needed
             if isinstance(self.config.attack_name, list):
-                attack = "+".join(self.config.attack_name)  # Join attack names with +
+                # Join attack names with +
+                attack = "+".join(self.config.attack_name)
             else:
                 attack = self.config.attack_name
-                
+
             folder = os.path.join("out", task, dataset,
-                                model_name, "attack", attack)
+                                  model_name, "attack", attack)
             os.makedirs(folder, exist_ok=True)
-            
+
             # The rest of the method remains the same
             num_samples = min(5, adv_data.size(0))
             for i in range(num_samples):
@@ -235,7 +284,7 @@ class AdversarialTraining:
                 save_image(adv_data[i], adv_filename)
                 perturbation = adv_data[i] - orig[i]
                 save_image(perturbation, pert_filename)
-                
+
             perturbation_tensor = adv_data[:num_samples] - orig[:num_samples]
             perturbations = perturbation_tensor.view(num_samples, -1)
             avg_norm = torch.norm(perturbations, p=2, dim=1).mean().item()

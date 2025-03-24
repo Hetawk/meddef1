@@ -113,35 +113,39 @@ def parse_args(mode='train'):
         parser.add_argument('--lr_patience', type=int, default=10,
                             help='Patience for ReduceLROnPlateau scheduler')
 
-        # Adversarial options (common to both train and test)
+        # Adversarial training options - CONSOLIDATED SECTION
         parser.add_argument('--adversarial', action='store_true',
                             help='Enable adversarial training/testing')
         parser.add_argument('--attack_type', type=str, nargs='+',
                             default=['fgsm'],
                             choices=['fgsm', 'pgd', 'bim', 'jsma'],
                             help='Type(s) of attack for adversarial training/testing. Can specify multiple attacks.')
-        parser.add_argument('--attack_eps', type=float, default=0.3,
-                            help='Epsilon for adversarial attacks')
+        parser.add_argument('--attack_eps', type=float, default=0.1,
+                            help='Final epsilon for adversarial attacks (default: 0.1)')
+        parser.add_argument('--initial_epsilon', type=float, default=None,
+                            help='Initial epsilon for progressive adversarial training (default: attack_eps/3)')
+        parser.add_argument('--epsilon_steps', type=int, default=5,
+                            help='Number of epochs to increase epsilon over (default: 5)')
+        parser.add_argument('--adv_weight', type=float, default=0.5,
+                            help='Final weight for adversarial loss (default: 0.5)')
+        parser.add_argument('--initial_adv_weight', type=float, default=0.2,
+                            help='Initial weight for adversarial loss (default: 0.2)')
         parser.add_argument('--attack_alpha', type=float, default=0.01,
-                            help='Alpha for adversarial attacks')
-        parser.add_argument('--attack_steps', type=int, default=40,
-                            help='Number of steps for iterative attacks')
-
-        # Additional adversarial training arguments
-        parser.add_argument('--adv_weight', type=float, default=1.0,
-                            help='Weight for adversarial loss')
+                            help='Step size for PGD attack')
+        parser.add_argument('--attack_steps', type=int, default=10,
+                            help='Number of steps for PGD attack')
         parser.add_argument('--adv_init_mag', type=float, default=0.01,
                             help='Initial magnitude for adversarial perturbation')
-        parser.add_argument('--alpha', type=float, default=0.01,
-                            help='Alpha for PGD attack')
-        parser.add_argument('--iterations', type=int, default=40,
-                            help='Iterations for PGD attack')
         parser.add_argument('--save_attacks', action='store_true',
                             help='Save generated adversarial samples')
 
         # Defense task options
         parser.add_argument('--prune_rate', type=float, default=0.3,
                             help='Pruning rate for defense task')
+
+        # Add option to run a quick test after training
+        parser.add_argument('--quick_test_after_training', action='store_true',
+                            help='Run a quick test evaluation after training completes')
 
     elif mode == 'test':
         # Testing specific parameters

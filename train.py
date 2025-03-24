@@ -16,6 +16,7 @@ from model.model_loader import ModelLoader
 from loader.dataset_loader import DatasetLoader
 from utils.robustness.optimizers import OptimizerLoader
 from utils.robustness.lr_scheduler import LRSchedulerLoader
+import torch.nn as nn
 from utils.utility import get_model_params
 from utils.weighted_losses import WeightedCrossEntropyLoss, AggressiveMinorityWeightedLoss, DynamicSampleWeightedLoss
 from utils.metrics import Metrics
@@ -26,7 +27,7 @@ import json
 import warnings  # added import
 from tqdm import tqdm   # Added import for progress bar
 import torch.backends.cudnn  # Add this to ensure cudnn is recognized
-from sklearn.metrics import precision_recall_curve, roc_curve, auc
+from sklearn.metrics import precision_recall_curve, roc_curve, auc, confusion_matrix
 import matplotlib.pyplot as plt
 from collections import Counter
 
@@ -306,8 +307,9 @@ class Trainer:
             logging.error(f"Failed to create WeightedRandomSampler: {e}")
 
     def calculate_detailed_metrics(self, true_labels, predictions, probabilities=None, phase="train"):
-        """Calculate detailed metrics including per-class performance"""
-        detailed_metrics = {}
+        """Calculate metrics with reduced detail during training - ensuring basic metrics are always available"""
+        # Import necessary metrics functions at the top of the function to ensure availability
+        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 
         # Convert tensors to numpy arrays if needed
         if isinstance(true_labels, torch.Tensor):
@@ -317,13 +319,51 @@ class Trainer:
         if probabilities is not None and isinstance(probabilities, torch.Tensor):
             probabilities = probabilities.cpu().numpy()
 
-        # Calculate overall metrics
-        metrics_dict = Metrics.calculate_metrics(
-            true_labels, predictions, probabilities)
-        detailed_metrics.update(metrics_dict)
+        # During training, just calculate basic overall metrics to save computation time
+        if phase == "train" and not (hasattr(self, 'epochs') and self.current_epoch == self.epochs - 1):
+            # Handle case where predictions is a 2D array
+            if predictions.ndim > 1:
+                predictions = predictions.flatten()
 
-        # Add per-class metrics if requested
-        if self.per_class_metrics:
+            # Handle case where true_labels is a 2D array
+            if true_labels.ndim > 1:
+                true_labels = true_labels.flatten()
+
+            # Basic metrics with zero_division=0 to avoid errors
+            return {
+                'accuracy': np.mean(true_labels == predictions),
+                'precision': precision_score(true_labels, predictions, average='macro', zero_division=0),
+                'recall': recall_score(true_labels, predictions, average='macro', zero_division=0),
+                'f1': f1_score(true_labels, predictions, average='macro', zero_division=0),
+                'confusion_matrix': confusion_matrix(true_labels, predictions).tolist()
+            }
+
+        # For validation and test phases, calculate the full detailed metrics
+        try:
+            metrics_dict = Metrics.calculate_metrics(
+                true_labels, predictions, probabilities)
+        except Exception as e:
+            # Fallback to basic metrics if calculation fails
+            logging.warning(
+                f"Error calculating detailed metrics: {e}. Using basic metrics instead.")
+            from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+
+            # Flatten arrays if needed
+            if predictions.ndim > 1:
+                predictions = predictions.flatten()
+            if true_labels.ndim > 1:
+                true_labels = true_labels.flatten()
+
+            return {
+                'accuracy': np.mean(true_labels == predictions),
+                'precision': precision_score(true_labels, predictions, average='macro', zero_division=0),
+                'recall': recall_score(true_labels, predictions, average='macro', zero_division=0),
+                'f1': f1_score(true_labels, predictions, average='macro', zero_division=0),
+                'confusion_matrix': confusion_matrix(true_labels, predictions).tolist()
+            }
+
+        # Only add per-class metrics on test or final validation if calculation succeeded
+        if (phase == "test" or (phase == "val" and hasattr(self, 'current_epoch') and self.current_epoch == self.epochs - 1)) and self.per_class_metrics:
             per_class = {}
             classes = np.unique(true_labels)
 
@@ -332,48 +372,39 @@ class Trainer:
                 if sum(cls_mask) == 0:
                     continue
 
-                # Calculate binary metrics for this class (one-vs-rest)
                 cls_true = (true_labels == cls).astype(int)
                 cls_pred = (predictions == cls).astype(int)
 
-                # Basic metrics per class
                 try:
+                    # Use imported functions directly to avoid reference errors
                     cls_metrics = {
-                        'accuracy': Metrics.to_numpy(np.mean(cls_true == cls_pred)),
-                        'precision': Metrics.calculate_metrics(cls_true, cls_pred)['precision'],
-                        'recall': Metrics.calculate_metrics(cls_true, cls_pred)['recall'],
-                        'f1': Metrics.calculate_metrics(cls_true, cls_pred)['f1'],
+                        'accuracy': np.mean(cls_true == cls_pred),
+                        'precision': precision_score(cls_true, cls_pred, zero_division=0),
+                        'recall': recall_score(cls_true, cls_pred, zero_division=0),
+                        'f1': f1_score(cls_true, cls_pred, zero_division=0),
                         'support': np.sum(cls_true)
                     }
-
                     class_name = self.class_names[cls] if cls < len(
                         self.class_names) else f"Class {cls}"
                     per_class[class_name] = cls_metrics
                 except Exception as e:
                     logging.warning(
                         f"Error calculating metrics for class {cls}: {e}")
+                    # Create partial metrics if calculation fails
+                    cls_metrics = {
+                        'accuracy': np.mean(cls_true == cls_pred),
+                        'precision': 0.0,
+                        'recall': 0.0,
+                        'f1': 0.0,
+                        'support': np.sum(cls_true)
+                    }
+                    class_name = self.class_names[cls] if cls < len(
+                        self.class_names) else f"Class {cls}"
+                    per_class[class_name] = cls_metrics
 
-            detailed_metrics['per_class'] = per_class
+            metrics_dict['per_class'] = per_class
 
-        # If it's binary classification and we have probabilities, optimize threshold
-        if len(np.unique(true_labels)) == 2 and probabilities is not None and self.optimize_threshold:
-            if phase == "val":
-                self._optimize_threshold(true_labels, probabilities)
-
-            # Apply optimal threshold to predictions
-            if probabilities.ndim > 1:
-                # Use probability of positive class
-                opt_preds = (probabilities[:, 1] > self.threshold).astype(int)
-            else:
-                opt_preds = (probabilities > self.threshold).astype(int)
-
-            # Calculate metrics with optimized threshold
-            opt_metrics = Metrics.calculate_metrics(true_labels, opt_preds)
-            detailed_metrics['optimized_threshold'] = self.threshold
-            detailed_metrics['optimized_accuracy'] = opt_metrics['accuracy']
-            detailed_metrics['optimized_f1'] = opt_metrics['f1']
-
-        return detailed_metrics
+        return metrics_dict
 
     def _optimize_threshold(self, true_labels, probabilities):
         """Find optimal threshold for binary classification"""
@@ -401,74 +432,30 @@ class Trainer:
             f"Optimized threshold: {self.threshold:.4f} with F1: {f1_scores[best_idx]:.4f}")
 
     def _visualize_metrics(self, metrics, epoch, phase="train"):
-        """Create and save visualizations for metrics with proper resource handling"""
+        """Create minimal visualizations during training"""
         if not hasattr(self, 'visualization'):
             return
 
-        # Only create visualizations periodically to save resources
+        # Only create visualizations for final epoch or every 10 epochs
         if epoch % 10 != 0 and epoch != self.epochs - 1:
             return
 
-        # Create directory for visualizations
-        viz_dir = os.path.join('out', self.task_name, self.dataset_name,
-                               self.model_name, 'visualizations')
-        os.makedirs(viz_dir, exist_ok=True)
+        # Only visualize validation or test phases (skip training phase visualization)
+        if phase == "train" and epoch != self.epochs - 1:
+            return
 
         try:
-            # Create confusion matrix plot
-            if 'confusion_matrix' in metrics:
-                cm = np.array(metrics['confusion_matrix'])
-                fig = plt.figure(figsize=(10, 8))
-                plt.imshow(cm, interpolation='nearest', cmap='Blues')
-                plt.title(f'Confusion Matrix - Epoch {epoch+1}')
-                plt.colorbar()
-
-                # Add class labels
-                classes = self.class_names if len(self.class_names) == len(cm) else [
-                    f"Class {i}" for i in range(len(cm))]
-                tick_marks = np.arange(len(classes))
-                plt.xticks(tick_marks, classes, rotation=45)
-                plt.yticks(tick_marks, classes)
-
-                # Add text annotations
-                thresh = cm.max() / 2.
-                for i in range(cm.shape[0]):
-                    for j in range(cm.shape[1]):
-                        plt.text(j, i, format(cm[i, j], 'd'),
-                                 horizontalalignment="center",
-                                 color="white" if cm[i, j] > thresh else "black")
-
-                plt.tight_layout()
-                plt.ylabel('True label')
-                plt.xlabel('Predicted label')
-                plt.savefig(os.path.join(
-                    viz_dir, f'confusion_matrix_{phase}_epoch_{epoch+1}.png'))
-                plt.close(fig)  # Explicitly close figure
-
-            # Create per-class metrics bar chart
+            # Only create visualization if we have per-class metrics (final epoch or test)
             if 'per_class' in metrics:
-                per_class = metrics['per_class']
-                metrics_to_plot = ['precision', 'recall', 'f1']
-
-                fig = plt.figure(figsize=(12, 6))
-                x = np.arange(len(per_class))
-                width = 0.25
-
-                for i, metric in enumerate(metrics_to_plot):
-                    values = [per_class[cls][metric] for cls in per_class]
-                    plt.bar(x + width * (i - 1), values,
-                            width, label=metric.capitalize())
-
-                plt.xlabel('Class')
-                plt.ylabel('Score')
-                plt.title(f'Per-Class Metrics - Epoch {epoch+1}')
-                plt.xticks(x, per_class.keys(), rotation=45)
-                plt.legend()
-                plt.tight_layout()
-                plt.savefig(os.path.join(
-                    viz_dir, f'per_class_metrics_{phase}_epoch_{epoch+1}.png'))
-                plt.close(fig)  # Explicitly close figure
-
+                self.visualization.visualize_metrics(
+                    metrics=metrics,
+                    task_name=self.task_name,
+                    dataset_name=self.dataset_name,
+                    model_name=self.model_name,
+                    phase=phase,
+                    epoch=epoch,
+                    class_names=self.class_names
+                )
         except Exception as e:
             logging.warning(f"Failed to create visualization: {e}")
             plt.close('all')  # Close any open figures on error
@@ -509,11 +496,17 @@ class Trainer:
 
         # Add tracking for detailed metrics
         for epoch in range(self.epochs):
+            self.current_epoch = epoch  # Track current epoch for metrics optimization
+
             # Update epoch for dynamic sample weighting if needed
             if isinstance(self.criterion, DynamicSampleWeightedLoss):
                 self.criterion.update_epoch(epoch)
                 logging.info(
                     f"Updated dynamic loss function for epoch {epoch+1}")
+
+            # Update adversarial training parameters if using
+            if self.adversarial:
+                self.adversarial_trainer.update_parameters(epoch)
 
             self.model.train()
             epoch_loss = 0.0
@@ -549,7 +542,7 @@ class Trainer:
                         if self.adversarial:
                             if hasattr(self.adversarial_trainer.attack, 'generate'):
                                 adv_data = self.adversarial_trainer.attack.generate(
-                                    data, target, self.args.epsilon)
+                                    data, target, self.adversarial_trainer.epsilon)  # Use the current epsilon
                             else:
                                 _, adv_data, _ = self.adversarial_trainer.attack.attack(
                                     data, target)
@@ -561,7 +554,9 @@ class Trainer:
                                 dim=1, keepdim=True)
                             adv_correct += adv_pred.eq(
                                 target.view_as(adv_pred)).sum().item()
-                            w = float(self.args.adv_weight)
+
+                            # Use the current adv_weight parameter which varies over epochs
+                            w = float(self.adversarial_trainer.adv_weight)
                             loss = (1 - w) * loss + w * adv_batch_loss
                         loss = loss / self.accumulation_steps
                     if not torch.isfinite(loss):
@@ -603,10 +598,7 @@ class Trainer:
                     self.optimizer.zero_grad(set_to_none=True)
                     continue
 
-            val_loss, val_accuracy = self.validate()
-            # Run validation with detailed metrics to get F1 and other scores
             val_loss, val_accuracy, val_detailed_metrics = self.validate_with_metrics()
-
             # Extract F1 score and balanced accuracy from detailed metrics
             val_f1 = val_detailed_metrics.get('f1', 0.0)
             val_balanced_acc = val_detailed_metrics.get(
@@ -629,34 +621,58 @@ class Trainer:
             # Save best model based on validation performance using the selected metric
             improved = False
 
-            if early_stopping_metric == 'loss':
-                if val_loss < self.best_val_loss:
-                    self.best_val_loss = val_loss
-                    self.best_val_acc = val_accuracy
-                    self.best_val_f1 = val_f1
-                    self.best_val_balanced_acc = val_balanced_acc
-                    improved = True
-            elif early_stopping_metric == 'f1':
-                if val_f1 > self.best_val_f1:
-                    self.best_val_loss = val_loss
-                    self.best_val_acc = val_accuracy
-                    self.best_val_f1 = val_f1
-                    self.best_val_balanced_acc = val_balanced_acc
-                    improved = True
-            elif early_stopping_metric == 'balanced_acc':
-                if val_balanced_acc > self.best_val_balanced_acc:
-                    self.best_val_loss = val_loss
-                    self.best_val_acc = val_accuracy
-                    self.best_val_f1 = val_f1
-                    self.best_val_balanced_acc = val_balanced_acc
-                    improved = True
-            else:  # Default to accuracy
-                if val_accuracy > self.best_val_acc:
-                    self.best_val_loss = val_loss
-                    self.best_val_acc = val_accuracy
-                    self.best_val_f1 = val_f1
-                    self.best_val_balanced_acc = val_balanced_acc
-                    improved = True
+            # In the validation, add a specific evaluation for adversarial validation accuracy
+            if self.adversarial:
+                clean_val_loss, clean_val_accuracy = val_loss, val_accuracy
+                adv_val_loss, adv_val_accuracy = self.validate_adversarial()
+                logging.info(f"Validation - Clean: Loss={clean_val_loss:.4f}, Acc={clean_val_accuracy:.4f} | "
+                             f"Adversarial: Loss={adv_val_loss:.4f}, Acc={adv_val_accuracy:.4f}")
+
+                # Use a combined metric for early stopping that balances clean and adversarial performance
+                if early_stopping_metric == 'loss':
+                    combined_val_loss = 0.5 * clean_val_loss + 0.5 * adv_val_loss
+                    if combined_val_loss < self.best_val_loss:
+                        self.best_val_loss = combined_val_loss
+                        improved = True
+                elif early_stopping_metric == 'f1' or early_stopping_metric == 'balanced_acc':
+                    combined_val_acc = 0.5 * clean_val_accuracy + 0.5 * adv_val_accuracy
+                    if combined_val_acc > self.best_val_acc:
+                        self.best_val_acc = combined_val_acc
+                        improved = True
+                else:  # Default to accuracy
+                    combined_val_acc = 0.5 * clean_val_accuracy + 0.5 * adv_val_accuracy
+                    if combined_val_acc > self.best_val_acc:
+                        self.best_val_acc = combined_val_acc
+                        improved = True
+            else:
+                if early_stopping_metric == 'loss':
+                    if val_loss < self.best_val_loss:
+                        self.best_val_loss = val_loss
+                        self.best_val_acc = val_accuracy
+                        self.best_val_f1 = val_f1
+                        self.best_val_balanced_acc = val_balanced_acc
+                        improved = True
+                elif early_stopping_metric == 'f1':
+                    if val_f1 > self.best_val_f1:
+                        self.best_val_loss = val_loss
+                        self.best_val_acc = val_accuracy
+                        self.best_val_f1 = val_f1
+                        self.best_val_balanced_acc = val_balanced_acc
+                        improved = True
+                elif early_stopping_metric == 'balanced_acc':
+                    if val_balanced_acc > self.best_val_balanced_acc:
+                        self.best_val_loss = val_loss
+                        self.best_val_acc = val_accuracy
+                        self.best_val_f1 = val_f1
+                        self.best_val_balanced_acc = val_balanced_acc
+                        improved = True
+                else:  # Default to accuracy
+                    if val_accuracy > self.best_val_acc:
+                        self.best_val_loss = val_loss
+                        self.best_val_acc = val_accuracy
+                        self.best_val_f1 = val_f1
+                        self.best_val_balanced_acc = val_balanced_acc
+                        improved = True
 
             if improved:
                 self.no_improvement_count = 0
@@ -670,11 +686,6 @@ class Trainer:
                     f"No improvement in {early_stopping_metric} for {self.no_improvement_count} epochs.")
 
             # Only apply early stopping after minimum epochs
-            if epoch >= min_epochs and self.no_improvement_count >= patience:
-                logging.info(
-                    f"Early stopping triggered after {epoch + 1} epochs (minimum epochs: {min_epochs})")
-                break
-
             epoch_acc = correct / total if total > 0 else 0
             adv_accuracy = (
                 adv_correct / total) if (self.adversarial and total > 0) else 0
@@ -738,9 +749,6 @@ class Trainer:
                                  f"Recall={cls_metrics['recall']:.4f}, "
                                  f"Support={cls_metrics['support']}")
 
-            # Run validation with detailed metrics
-            val_loss, val_accuracy, val_detailed_metrics = self.validate_with_metrics()
-
             # Update history with validation metrics
             self.history['val_precision'].append(
                 val_detailed_metrics.get('precision', 0))
@@ -757,28 +765,21 @@ class Trainer:
                          f"F1: {val_f1:.4f}, "
                          f"Balanced Acc: {val_balanced_acc:.4f}")
 
-            # ...existing code...
-
-        # After training complete, add final test results
-        test_results = self.test()
-        if self.adversarial:
-            test_loss, test_accuracy, detailed_metrics = test_results[:3]
-            if len(test_results) > 3:
-                adv_test_loss, adv_test_accuracy = test_results[3:]
-                self.tb_logger.log_test_results(
-                    test_loss, test_accuracy, adv_test_loss, adv_test_accuracy)
-            else:
-                self.tb_logger.log_test_results(test_loss, test_accuracy)
-        else:
-            test_loss, test_accuracy, detailed_metrics = test_results
-            self.tb_logger.log_test_results(test_loss, test_accuracy)
-
-        # After training complete, log best metrics
+        # After training complete - REMOVE automatic test that causes duplication
+        # Instead just log best metrics
         logging.info(f"Training finished. Best metrics - "
                      f"Loss: {self.best_val_loss:.4f}, "
                      f"Accuracy: {self.best_val_acc:.4f}, "
                      f"F1: {self.best_val_f1:.4f}, "
                      f"Balanced Acc: {self.best_val_balanced_acc:.4f}")
+
+        # Store the test metrics properties for access after training
+        self.best_metrics = {
+            'loss': self.best_val_loss,
+            'accuracy': self.best_val_acc,
+            'f1': self.best_val_f1,
+            'balanced_acc': self.best_val_balanced_acc
+        }
 
         # Close the TensorBoard logger
         self.tb_logger.close()
@@ -922,29 +923,81 @@ class Trainer:
                 phase="val"
             )
 
-            # Visualize metrics
-            self._visualize_metrics(detailed_metrics, epoch=0, phase="val")
+            # Visualize metrics only on milestone epochs
+            if hasattr(self, 'current_epoch') and (self.current_epoch % 10 == 0 or self.current_epoch == self.epochs - 1):
+                # Log detailed metrics
+                logging.info(f"Validation - Loss: {val_loss:.4f}, "
+                             f"Accuracy: {accuracy:.4f}, "
+                             f"Precision: {detailed_metrics['precision']:.4f}, "
+                             f"Recall: {detailed_metrics['recall']:.4f}, "
+                             f"F1: {detailed_metrics['f1']:.4f}")
 
-            # Log detailed metrics
-            logging.info(f"Validation - Loss: {val_loss:.4f}, "
-                         f"Accuracy: {accuracy:.4f}, "
-                         f"Precision: {detailed_metrics['precision']:.4f}, "
-                         f"Recall: {detailed_metrics['recall']:.4f}, "
-                         f"F1: {detailed_metrics['f1']:.4f}")
+                # Only log per-class metrics on final epoch to reduce verbosity
+                if 'per_class' in detailed_metrics and self.current_epoch == self.epochs - 1:
+                    per_class = detailed_metrics['per_class']
+                    for cls_name, cls_metrics in per_class.items():
+                        logging.info(f"  {cls_name}: F1={cls_metrics['f1']:.4f}, "
+                                     f"Precision={cls_metrics['precision']:.4f}, "
+                                     f"Recall={cls_metrics['recall']:.4f}")
 
-            # Log per-class metrics
-            if 'per_class' in detailed_metrics:
-                per_class = detailed_metrics['per_class']
-                for cls_name, cls_metrics in per_class.items():
-                    logging.info(f"  {cls_name}: F1={cls_metrics['f1']:.4f}, "
-                                 f"Precision={cls_metrics['precision']:.4f}, "
-                                 f"Recall={cls_metrics['recall']:.4f}")
+                # Visualize metrics only on final epoch
+                if self.current_epoch == self.epochs - 1:
+                    self._visualize_metrics(
+                        detailed_metrics, epoch=self.current_epoch, phase="val")
+            else:
+                # Simple log for non-milestone epochs
+                logging.info(
+                    f"Validation - Loss: {val_loss:.4f}, Accuracy: {accuracy:.4f}")
 
             return val_loss, accuracy, detailed_metrics
 
         except Exception as e:
             logging.error(f"Error during validation with metrics: {e}")
             return float('inf'), 0.0, {}
+        finally:
+            self.model.train()
+
+    def validate_adversarial(self):
+        """Specific validation method for adversarial examples"""
+        self.model.eval()
+        val_loss = 0
+        correct = 0
+        total = 0
+
+        try:
+            for batch_idx, (data, target) in enumerate(self.val_loader):
+                if isinstance(data, torch.Tensor):
+                    data = data.to(self.device, non_blocking=True)
+                if isinstance(target, torch.Tensor):
+                    target = target.to(self.device, non_blocking=True)
+
+                # Generate adversarial examples for validation
+                with torch.enable_grad():  # Need gradients for attack generation
+                    if hasattr(self.adversarial_trainer.attack, 'generate'):
+                        adv_data = self.adversarial_trainer.attack.generate(
+                            data, target, self.adversarial_trainer.epsilon)
+                    else:
+                        _, adv_data, _ = self.adversarial_trainer.attack.attack(
+                            data, target)
+
+                # Evaluate on adversarial examples
+                with torch.no_grad(), autocast():
+                    output = self.model(adv_data)
+                    loss = self.criterion(output, target)
+
+                val_loss += loss.item()
+                pred = output.argmax(dim=1, keepdim=True)
+                correct += pred.eq(target.view_as(pred)).sum().item()
+                total += target.size(0)
+
+            val_loss /= len(self.val_loader)
+            accuracy = correct / total if total > 0 else 0
+
+            return val_loss, accuracy
+
+        except Exception as e:
+            logging.error(f"Error during adversarial validation: {e}")
+            return float('inf'), 0.0
         finally:
             self.model.train()
 
@@ -984,10 +1037,12 @@ class Trainer:
                 self.predictions.extend(pred.cpu().numpy())
                 self.probabilities.extend(probs.cpu().numpy())
 
-                # ... existing adversarial code ...
-
         test_loss /= len(self.test_loader)
         accuracy = correct / total if total > 0 else 0
+
+        # Store these metrics as class attributes for easier access later
+        self.test_loss = test_loss
+        self.test_accuracy = accuracy
 
         # Calculate and log detailed metrics
         detailed_metrics = self.calculate_detailed_metrics(
@@ -996,6 +1051,8 @@ class Trainer:
             np.array(self.probabilities),
             phase="test"
         )
+
+        self.test_f1 = detailed_metrics.get('f1', 0.0)
 
         # Create evaluator and save metrics
         evaluator = Evaluator(
@@ -1036,66 +1093,17 @@ class Trainer:
 
     def _create_threshold_curve(self, true_labels, probabilities):
         """Create and save threshold optimization curve for binary classification"""
-        try:
-            # Get probabilities for positive class
-            if probabilities.ndim > 1 and probabilities.shape[1] > 1:
-                pos_probs = probabilities[:, 1]
-            else:
-                pos_probs = probabilities
+        if not hasattr(self, 'visualization'):
+            return 0.5  # Default threshold
 
-            # Calculate precision, recall, thresholds
-            precision, recall, thresholds = precision_recall_curve(
-                true_labels, pos_probs)
-
-            # Calculate F1 score for each threshold
-            f1_scores = 2 * precision * recall / (precision + recall + 1e-10)
-
-            # Create directory for visualizations
-            viz_dir = os.path.join('out', self.task_name, self.dataset_name,
-                                   self.model_name, 'visualizations')
-            os.makedirs(viz_dir, exist_ok=True)
-
-            # Create precision-recall vs threshold curve
-            plt.figure(figsize=(10, 6))
-            plt.plot(thresholds, precision[:-1], 'b--', label='Precision')
-            plt.plot(thresholds, recall[:-1], 'g-', label='Recall')
-            plt.plot(thresholds, f1_scores[:-1], 'r-', label='F1 Score')
-
-            # Mark optimal threshold
-            best_idx = np.argmax(f1_scores[:-1])
-            best_threshold = thresholds[best_idx]
-            plt.axvline(x=best_threshold, color='k', linestyle='-', alpha=0.3)
-            plt.text(best_threshold, 0.5, f'Best threshold: {best_threshold:.4f}',
-                     rotation=90, verticalalignment='center')
-
-            plt.xlabel('Threshold')
-            plt.ylabel('Score')
-            plt.title('Precision, Recall, and F1 Score vs Threshold')
-            plt.legend()
-            plt.grid(True, alpha=0.3)
-            plt.savefig(os.path.join(viz_dir, 'threshold_optimization.png'))
-            plt.close()
-
-            # Create ROC curve
-            fpr, tpr, _ = roc_curve(true_labels, pos_probs)
-            roc_auc = auc(fpr, tpr)
-
-            plt.figure(figsize=(8, 6))
-            plt.plot(fpr, tpr, 'b-', label=f'ROC curve (AUC = {roc_auc:.4f})')
-            plt.plot([0, 1], [0, 1], 'k--')
-            plt.xlim([0.0, 1.0])
-            plt.ylim([0.0, 1.05])
-            plt.xlabel('False Positive Rate')
-            plt.ylabel('True Positive Rate')
-            plt.title('Receiver Operating Characteristic (ROC) Curve')
-            plt.legend(loc='lower right')
-            plt.grid(True, alpha=0.3)
-            plt.savefig(os.path.join(viz_dir, 'roc_curve.png'))
-            plt.close()
-
-            logging.info(f"Threshold optimization curves saved to {viz_dir}")
-        except Exception as e:
-            logging.error(f"Error creating threshold curve: {e}")
+        # Use the consolidated visualization class method
+        return self.visualization.create_threshold_curve(
+            true_labels=true_labels,
+            probabilities=probabilities,
+            task_name=self.task_name,
+            dataset_name=self.dataset_name,
+            model_name=self.model_name
+        )
 
     def save_model(self, path):
         filename, ext = os.path.splitext(path)
@@ -1125,84 +1133,35 @@ class Trainer:
             logging.warning("No training history to save.")
             return
 
-        # Verify all lists have the same length
-        epoch_len = len(self.history['epoch'])
-        for key in keys_to_check:
-            if len(self.history[key]) != epoch_len:
-                raise ValueError(
-                    f"Length of {key} ({len(self.history[key])}) does not match length of 'epoch' ({epoch_len})")
+        # Create DataFrame with only export-safe columns
+        data = {'epoch': self.history['epoch']}
+        for k in keys_to_check:
+            if k in self.history and len(self.history[k]) >= len(self.history['epoch']):
+                # Skip complex data types that can't be easily put in a DataFrame
+                if k in ['true_labels', 'predictions']:
+                    continue
+                data[k] = self.history[k]
 
-        if len(self.history['true_labels']) != len(self.history['predictions']):
-            raise ValueError(
-                f"Length of true_labels ({len(self.history['true_labels'])}) does not match length of predictions ({len(self.history['predictions'])}).")
-
-        self.history['model_name'] = [
-            self.model_name] * len(self.history['epoch'])
-
-        history_df = pd.DataFrame(self.history)
-        history_df['true_labels'] = history_df['true_labels'].apply(
-            lambda x: ','.join(map(str, x)))
-        history_df['predictions'] = history_df['predictions'].apply(
-            lambda x: ','.join(map(str, x)))
-
-        if not os.path.isfile(filename):
-            history_df.to_csv(filename, index=False)
-        else:
-            history_df.to_csv(filename, mode='a', index=False, header=False)
-
-        logging.info(f'Training history saved to {filename}')
-
-    def get_test_results(self):
-        return np.array(self.true_labels), np.array(self.predictions)
-
-    def load_model(self, path):
-        state = torch.load(path, map_location=self.device)
-        new_state = {}
-        for key, value in state.items():
-            if key.endswith('weight_orig'):
-                new_key = key[:-len('_orig')]
-                new_state[new_key] = value
-            elif key.endswith('weight_mask'):
-                continue
-            else:
-                new_state[key] = value
-        self.model.load_state_dict(new_state)
-        self.model.to(self.device)
-        self.model.eval()
-        logging.info(f"Loaded model from {path}")
-
-    # Add a method to close the TensorBoard writer in case training is interrupted
-    def __del__(self):
-        """Clean up resources when the trainer is destroyed"""
-        if hasattr(self, 'tb_logger'):
-            self.tb_logger.close()
-
-        # Close all matplotlib figures
-        import matplotlib.pyplot as plt
-        plt.close('all')
-
-        # Clean up visualization resources
-        if hasattr(self, 'visualization') and hasattr(self.visualization, 'close_figures'):
-            self.visualization.close_figures()
+        try:
+            import pandas as pd
+            df = pd.DataFrame(data)
+            df.to_csv(filename, index=False)
+            logging.info(f"History saved to {filename}")
+        except Exception as e:
+            logging.error(f"Error saving history to CSV: {e}")
 
 
 class TrainingManager:
+    """Manages the training process for multiple models and datasets"""
+
     def __init__(self, args):
         self.args = args
-        self.device = args.device
+        self._setup_random_seeds(args.manualSeed)
 
-        # Setup random seed - simplified version
-        seed = getattr(args, 'manualSeed', None)
-        if seed is None:
-            seed = random.randint(1, 10000)
-        # Now this method accepts seed correctly
-        self._setup_random_seeds(seed)
-
-        # Initialize components
         self.model_loader = ModelLoader(
             args.device, args.arch,
-            getattr(args, 'pretrained', True),  # Add default for pretrained
-            getattr(args, 'fp16', False)        # Add default for fp16
+            getattr(args, 'pretrained', True),
+            getattr(args, 'fp16', False)
         )
         self.dataset_loader = DatasetLoader()
         self.optimizer_loader = OptimizerLoader()
@@ -1221,7 +1180,7 @@ class TrainingManager:
             torch.backends.cudnn.deterministic = True
             torch.backends.cudnn.benchmark = False
 
-    def train_dataset(self, dataset_name):
+    def train_dataset(self, dataset_name, run_test=False):
         """Handle training for a specific dataset"""
         # Load dataset and get number of classes
         train_loader, val_loader, test_loader = self.dataset_loader.load_data(
@@ -1249,17 +1208,16 @@ class TrainingManager:
             try:
                 class_counts = {}
                 if hasattr(train_loader.dataset, 'targets'):
-                    for target in train_loader.dataset.targets:
-                        class_counts[target] = class_counts.get(target, 0) + 1
+                    targets = train_loader.dataset.targets
+                    unique, counts = np.unique(targets, return_counts=True)
+                    class_counts = dict(zip(unique, counts))
                 elif hasattr(train_loader.dataset, 'samples'):
-                    for _, target in train_loader.dataset.samples:
-                        class_counts[target] = class_counts.get(target, 0) + 1
-
+                    counts = {}
+                    for _, idx in train_loader.dataset.samples:
+                        counts[idx] = counts.get(idx, 0) + 1
+                    class_counts = counts
                 if class_counts:
-                    logging.info(
-                        f"Class distribution for {dataset_name}: {class_counts}")
-                    logging.info(
-                        f"Using {self.args.loss_type} loss function for imbalanced data")
+                    logging.info(f"Class distribution: {class_counts}")
             except Exception as e:
                 logging.warning(f"Couldn't analyze class distribution: {e}")
 
@@ -1278,54 +1236,63 @@ class TrainingManager:
 
                 # Train each model variation
                 for model, model_name in models_and_names:
-                    # Create optimizer once and use it for both trainer and scheduler
-                    optimizer = self.optimizer_loader.get_optimizer(
-                        model, self.args)
-                    scheduler = self.lr_scheduler_loader.get_scheduler(
-                        optimizer, args=self.args)
-
-                    # Create base criterion - may be replaced by weighted criterion in Trainer
-                    base_criterion = torch.nn.CrossEntropyLoss()
-
-                    trainer = Trainer(
-                        model=model,
-                        train_loader=train_loader,
-                        val_loader=val_loader,
-                        test_loader=test_loader,
-                        optimizer=optimizer,
-                        criterion=base_criterion,
-                        model_name=model_name,
-                        task_name=self.args.task_name,
-                        dataset_name=dataset_name,
-                        device=self.device,
-                        config=self.args,
-                        scheduler=scheduler
-                    )
-
-                    trainer.train(patience=self.args.patience)
-
-                    # Handle both normal and adversarial test results
-                    if self.args.adversarial:
-                        test_result = trainer.test()
-                        test_loss, test_accuracy, detailed_metrics = test_result[:3]
-                        if len(test_result) > 3:  # Handle case where adv metrics are returned
-                            adv_test_loss, adv_test_accuracy = test_result[3:]
-                            logging.info(
-                                f"Test results for {model_name}:\n"
-                                f"Clean  - Loss: {test_loss:.4f}, Accuracy: {test_accuracy:.4f}, F1: {detailed_metrics.get('f1', 0):.4f}\n"
-                                f"Advers - Loss: {adv_test_loss:.4f}, Accuracy: {adv_test_accuracy:.4f}"
-                            )
-                        else:
-                            logging.info(
-                                f"Test results for {model_name}:\n"
-                                f"Clean  - Loss: {test_loss:.4f}, Accuracy: {test_accuracy:.4f}, F1: {detailed_metrics.get('f1', 0):.4f}"
-                            )
-                    else:
-                        test_loss, test_accuracy, detailed_metrics = trainer.test()
-                        logging.info(
-                            f"Test results for {model_name}: Loss={test_loss:.4f}, Accuracy={test_accuracy:.4f}, "
-                            f"F1={detailed_metrics.get('f1', 0):.4f}"
+                    # Create optimizer and scheduler for this model
+                    try:
+                        # Fix: Pass arguments properly for backward compatibility
+                        optimizer = self.optimizer_loader.get_optimizer(
+                            model=model,
+                            optimizer_name=getattr(
+                                self.args, 'optimizer', 'adam'),
+                            lr=self.args.lr,
+                            weight_decay=getattr(
+                                self.args, 'weight_decay', 1e-4)
                         )
+
+                        scheduler = None
+                        if getattr(self.args, 'scheduler', 'none') != 'none':
+                            # FIX: Change scheduler_name to scheduler in the call
+                            scheduler = self.lr_scheduler_loader.get_scheduler(
+                                optimizer=optimizer,
+                                scheduler=self.args.scheduler,  # Changed from scheduler_name to scheduler
+                                config=self.args
+                            )
+
+                        # Create loss function
+                        criterion = nn.CrossEntropyLoss()
+
+                        # Create trainer
+                        trainer = Trainer(
+                            model=model,
+                            train_loader=train_loader,
+                            val_loader=val_loader,
+                            test_loader=test_loader,
+                            optimizer=optimizer,
+                            criterion=criterion,
+                            model_name=model_name,
+                            task_name=self.args.task_name,
+                            dataset_name=dataset_name,
+                            device=self.args.device,
+                            config=self.args,
+                            scheduler=scheduler
+                        )
+
+                        # Train model
+                        # Default to 15 epochs patience
+                        patience = getattr(self.args, 'patience', 15)
+                        trainer.train(patience)
+
+                        # Save training history
+                        trainer.save_history_to_csv("training_history.csv")
+
+                        # Optionally run tests after training
+                        if run_test:
+                            test_results = trainer.test()
+                            logging.info(
+                                f"Test results for {model_name}: {test_results}")
+                    except Exception as e:
+                        logging.error(
+                            f"Error initializing training components for {model_name}: {str(e)}")
+                        continue
 
             except Exception as e:
                 logging.error(
