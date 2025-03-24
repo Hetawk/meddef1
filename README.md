@@ -268,8 +268,12 @@ python main.py --data ccts --task_name normal_training --epochs 100 --train_batc
 python dataset_processing.py --datasets chest_xray --enforce_split --train_split 0.8 --val_split 0.1 --test_split 0.1
 
 
-python dataset_processing.py --datasets ccts --enforce_split --train_split 0.8 --val_split 0.1 --test_split 0.1
+python dataset_processing.py --datasets ccts --enforce_split --train_split 0.7 --val_split 0.15 --test_split 0.15
 
+python main.py --data ccts --task_name normal_training --epochs 100 --train_batch 16 --lr 0.0001 --drop 0.2 --gpu-ids 0 --arch meddef1 --depth '{"meddef1": ["1.0"]}' --pin_memory --weight_decay 1e-4 
+
+
+python main.py --data ccts --task_name normal_training --epochs 100 --train_batch 16 --lr 0.0001 --drop 0.2 --gpu-ids 0 --arch meddef1 --depth '{"meddef1": ["1.0"]}' --pin_memory --weight_decay 1e-4 --adversarial --attack_eps 0.2 --adv_weight 0.5 --attack_type pgd
 
 ```
 
