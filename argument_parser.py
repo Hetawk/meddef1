@@ -31,9 +31,9 @@ def parse_args(mode='train'):
                         help='Use pinned memory')
 
     # Model architecture - Basic required arguments
-    parser.add_argument('--arch', '-a', nargs='+', default=['meddef', 'resnet', 'densenet'],
+    parser.add_argument('--arch', '-a', nargs='+', default=['meddef1', 'resnet', 'densenet'],
                         help='Architecture(s) to use. Provide one or multiple values. Separate multiple names with space or comma.')
-    parser.add_argument('--depth', type=str, default='{"meddef": [1.0, 1.1], "resnet": [18, 34], "densenet": [121]}',
+    parser.add_argument('--depth', type=str, default='{"meddef1": [1.0, 1.1], "resnet": [18, 34], "densenet": [121]}',
                         help='Model depths as JSON string')
 
     # Device configuration
@@ -138,6 +138,17 @@ def parse_args(mode='train'):
                             help='Initial magnitude for adversarial perturbation')
         parser.add_argument('--save_attacks', action='store_true',
                             help='Save generated adversarial samples')
+
+        # NEW: Add the missing adversarial training arguments
+        parser.add_argument('--dynamic_alpha', type=lambda x: x.lower() == 'true',
+                            default=True,
+                            help='Dynamically adjust alpha based on epsilon (default: True)')
+        parser.add_argument('--epsilon_schedule', type=str, default='linear',
+                            choices=['linear', 'exponential', 'cosine'],
+                            help='Schedule for epsilon progression (default: linear)')
+        parser.add_argument('--combined_early_stopping', type=lambda x: x.lower() == 'true',
+                            default=False,
+                            help='Use combined clean and adversarial metrics for early stopping (default: False)')
 
         # Defense task options
         parser.add_argument('--prune_rate', type=float, default=0.3,

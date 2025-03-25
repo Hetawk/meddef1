@@ -482,9 +482,20 @@ class Trainer:
             self.args, 'early_stopping_metric', 'loss')  # Default to loss instead of f1
         saved_attacks = False
 
+        # For adversarial training, initialize tracking of best adversarial metrics
+        if self.adversarial:
+            self.best_adv_acc = 0.0
+            # Consider both clean and adversarial performance for early stopping
+            combined_early_stopping = getattr(
+                self.args, 'combined_early_stopping', True)
+            if combined_early_stopping:
+                logging.info(
+                    "Using combined clean+adversarial metrics for early stopping")
+
         # Track best metrics
         self.best_val_loss = float('inf')
         self.best_val_acc = 0.0
+        self.best_combined_score = 0.0  # New metric for balancing clean and robust accuracy
 
         # Log model graph to TensorBoard (try with a sample batch)
         try:
@@ -525,180 +536,225 @@ class Trainer:
                 try:
                     # Data preparation: remove unused batch_indices
                     if isinstance(data, torch.Tensor):
-                        data = data.to(self.device, non_blocking=True)
+                        data = data.to(self.device)
                     if isinstance(target, torch.Tensor):
-                        target = target.to(self.device, non_blocking=True)
+                        target = target.to(self.device)
 
                     if self.adversarial and not saved_attacks and epoch == 0 and batch_idx == 0:
-                        orig, adv_data, _ = self.adversarial_trainer.attack.attack(
-                            data, target)
                         self.adversarial_trainer.save_attack_samples(
-                            orig, adv_data)
+                            data, data)
                         saved_attacks = True
 
                     with autocast():
                         output = self.model(data)
-                        loss = self.criterion(output, target)
-                        if self.adversarial:
-                            if hasattr(self.adversarial_trainer.attack, 'generate'):
-                                adv_data = self.adversarial_trainer.attack.generate(
-                                    data, target, self.adversarial_trainer.epsilon)  # Use the current epsilon
-                            else:
-                                _, adv_data, _ = self.adversarial_trainer.attack.attack(
-                                    data, target)
-                            with autocast():
-                                adv_batch_loss = self.criterion(
-                                    self.model(adv_data), target)
-                            adv_loss_sum += adv_batch_loss.item()
-                            adv_pred = self.model(adv_data).argmax(
-                                dim=1, keepdim=True)
-                            adv_correct += adv_pred.eq(
-                                target.view_as(adv_pred)).sum().item()
+                        clean_loss = self.criterion(output, target)
 
-                            # Use the current adv_weight parameter which varies over epochs
-                            w = float(self.adversarial_trainer.adv_weight)
-                            loss = (1 - w) * loss + w * adv_batch_loss
-                        loss = loss / self.accumulation_steps
+                        # Add adversarial loss if enabled
+                        if self.adversarial:
+                            # Get batch indices for pregenerated attacks if available
+                            batch_indices = list(range(batch_idx * len(data),
+                                                       (batch_idx + 1) * len(data)))
+
+                            # Calculate adversarial loss with current parameters
+                            adv_loss = self.adversarial_trainer.adversarial_loss(
+                                data, target, batch_indices)
+
+                            # Use the current weights that add up to 1.0
+                            combined_loss = (self.adversarial_trainer.clean_weight * clean_loss +
+                                             self.adversarial_trainer.adv_weight * adv_loss)
+                            loss = combined_loss
+                            adv_loss_sum += adv_loss.item()
+
+                            # Calculate adversarial accuracy for logging
+                            with torch.no_grad():
+                                # Generate adversarial examples
+                                if hasattr(self.adversarial_trainer.attack, 'generate'):
+                                    adv_data = self.adversarial_trainer.attack.generate(
+                                        data, target, epsilon=self.adversarial_trainer.epsilon)
+                                else:
+                                    _, adv_data, _ = self.adversarial_trainer.attack.attack(
+                                        data, target)
+
+                                # Calculate adversarial accuracy
+                                adv_output = self.model(adv_data)
+                                adv_pred = adv_output.argmax(dim=1)
+                                adv_correct += (adv_pred ==
+                                                target).sum().item()
+                        else:
+                            loss = clean_loss
+
                     if not torch.isfinite(loss):
-                        logging.debug(
-                            f"Non-finite loss encountered at batch {batch_idx}. Skipping batch.")
-                        self.optimizer.zero_grad(set_to_none=True)
+                        logging.warning(
+                            f"Non-finite loss detected in batch {batch_idx}")
                         continue
+
                     self.scaler.scale(loss).backward()
                     with torch.no_grad():
-                        batch_loss += loss.item() * self.accumulation_steps
+                        # Get predictions and update tracking metrics
                         pred = output.argmax(dim=1, keepdim=True)
                         correct += pred.eq(target.view_as(pred)).sum().item()
                         total += target.size(0)
+                        batch_loss = loss.item()
+                        epoch_loss += batch_loss
+
+                        # Store predictions and labels for metrics calculation
                         epoch_true_labels.extend(target.cpu().numpy())
                         epoch_predictions.extend(pred.cpu().numpy())
-                        output_probs = torch.nn.functional.softmax(
-                            output, dim=1)
-                        epoch_probabilities.extend(output_probs.cpu().numpy())
+
+                        # Store probabilities for metrics calculation
+                        probs = torch.nn.functional.softmax(output, dim=1)
+                        epoch_probabilities.extend(probs.cpu().numpy())
+
                     if (batch_idx + 1) % self.accumulation_steps == 0:
+                        # Unscale before clipping
                         self.scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(
-                        ), max_norm=self.args.max_grad_norm, error_if_nonfinite=False)
+
+                        # Apply gradient clipping if configured
+                        if hasattr(self.args, 'max_grad_norm'):
+                            nn.utils.clip_grad_norm_(
+                                self.model.parameters(), self.args.max_grad_norm)
+
+                        # Step optimizer and update scaler
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
                         self.optimizer.zero_grad(set_to_none=True)
-                        epoch_loss += batch_loss
-                        batch_loss = 0.0
+
                     if batch_idx % 100 == 0:
+                        accuracy = correct / total if total > 0 else 0
                         logging.info(
-                            f'Epoch: {epoch+1}/{self.epochs} | Batch: {batch_idx * len(data)}/{len(self.train_loader.dataset)} | Loss: {loss.item():.4f} | Accuracy: {correct/total if total else 0:.4f}')
+                            f"Epoch: {epoch+1}/{self.epochs} | Batch: {batch_idx * len(data)}/{len(self.train_loader.dataset)} | Loss: {batch_loss:.4f} | Accuracy: {accuracy:.4f}")
+
                 except RuntimeError as err:
                     logging.error(f"Runtime error in batch {batch_idx}: {err}")
                     self.optimizer.zero_grad(set_to_none=True)
-                    self.scaler = GradScaler()
+                    self.scaler = GradScaler()  # Reset scaler after error
                     continue
+
                 except Exception as exp:
                     logging.exception(
                         f"Unexpected error in batch {batch_idx}: {exp}")
                     self.optimizer.zero_grad(set_to_none=True)
                     continue
 
+            # Validate with clean data
             val_loss, val_accuracy, val_detailed_metrics = self.validate_with_metrics()
+
             # Extract F1 score and balanced accuracy from detailed metrics
             val_f1 = val_detailed_metrics.get('f1', 0.0)
             val_balanced_acc = val_detailed_metrics.get(
                 'balanced_accuracy', 0.0)
 
+            # For adversarial models, also evaluate adversarial validation accuracy
+            adv_val_loss = float('inf')
+            adv_val_accuracy = 0.0
+
+            if self.adversarial:
+                adv_val_loss, adv_val_accuracy = self.validate_adversarial()
+                logging.info(f"Validation - Clean: Loss={val_loss:.4f}, Acc={val_accuracy:.4f} | "
+                             f"Adversarial: Loss={adv_val_loss:.4f}, Acc={adv_val_accuracy:.4f}")
+
+                # Calculate a combined score that balances clean and robust performance
+                # This weighted harmonic mean penalizes large gaps between clean and robust accuracy
+                combined_score = 2 * val_accuracy * adv_val_accuracy / \
+                    (val_accuracy + adv_val_accuracy + 1e-10)
+                logging.info(
+                    f"Combined clean-robust score: {combined_score:.4f}")
+
+            # Apply scheduler after validation if using ReduceLROnPlateau
             if self.scheduler is not None:
                 if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                    # Use appropriate metric for scheduler
-                    if early_stopping_metric == 'f1':
-                        # Negate because ReduceLROnPlateau minimizes
-                        self.scheduler.step(-val_f1)
+                    if self.adversarial and combined_early_stopping:
+                        # Use combined score for ReduceLROnPlateau
+                        self.scheduler.step(combined_score)
+                    elif early_stopping_metric == 'f1':
+                        self.scheduler.step(val_f1)
                     elif early_stopping_metric == 'balanced_acc':
-                        # Negate because ReduceLROnPlateau minimizes
-                        self.scheduler.step(-val_balanced_acc)
+                        self.scheduler.step(val_balanced_acc)
                     else:
                         self.scheduler.step(val_loss)
                 else:
                     self.scheduler.step()
 
+                self.current_lr = self.optimizer.param_groups[0]['lr']
+
             # Save best model based on validation performance using the selected metric
             improved = False
 
-            # In the validation, add a specific evaluation for adversarial validation accuracy
-            if self.adversarial:
-                clean_val_loss, clean_val_accuracy = val_loss, val_accuracy
-                adv_val_loss, adv_val_accuracy = self.validate_adversarial()
-                logging.info(f"Validation - Clean: Loss={clean_val_loss:.4f}, Acc={clean_val_accuracy:.4f} | "
-                             f"Adversarial: Loss={adv_val_loss:.4f}, Acc={adv_val_accuracy:.4f}")
-
-                # Use a combined metric for early stopping that balances clean and adversarial performance
-                if early_stopping_metric == 'loss':
-                    combined_val_loss = 0.5 * clean_val_loss + 0.5 * adv_val_loss
-                    if combined_val_loss < self.best_val_loss:
-                        self.best_val_loss = combined_val_loss
-                        improved = True
-                elif early_stopping_metric == 'f1' or early_stopping_metric == 'balanced_acc':
-                    combined_val_acc = 0.5 * clean_val_accuracy + 0.5 * adv_val_accuracy
-                    if combined_val_acc > self.best_val_acc:
-                        self.best_val_acc = combined_val_acc
-                        improved = True
-                else:  # Default to accuracy
-                    combined_val_acc = 0.5 * clean_val_accuracy + 0.5 * adv_val_accuracy
-                    if combined_val_acc > self.best_val_acc:
-                        self.best_val_acc = combined_val_acc
-                        improved = True
+            if self.adversarial and combined_early_stopping:
+                # For adversarial training, use combined score for early stopping
+                if combined_score > self.best_combined_score:
+                    improved = True
+                    self.best_combined_score = combined_score
+                    self.best_val_loss = val_loss  # Still track this
+                    self.best_val_acc = val_accuracy
             else:
+                # Traditional early stopping based on selected metric
                 if early_stopping_metric == 'loss':
                     if val_loss < self.best_val_loss:
-                        self.best_val_loss = val_loss
-                        self.best_val_acc = val_accuracy
-                        self.best_val_f1 = val_f1
-                        self.best_val_balanced_acc = val_balanced_acc
                         improved = True
+                        self.best_val_loss = val_loss
                 elif early_stopping_metric == 'f1':
                     if val_f1 > self.best_val_f1:
-                        self.best_val_loss = val_loss
-                        self.best_val_acc = val_accuracy
-                        self.best_val_f1 = val_f1
-                        self.best_val_balanced_acc = val_balanced_acc
                         improved = True
+                        self.best_val_f1 = val_f1
                 elif early_stopping_metric == 'balanced_acc':
                     if val_balanced_acc > self.best_val_balanced_acc:
-                        self.best_val_loss = val_loss
-                        self.best_val_acc = val_accuracy
-                        self.best_val_f1 = val_f1
-                        self.best_val_balanced_acc = val_balanced_acc
                         improved = True
-                else:  # Default to accuracy
+                        self.best_val_balanced_acc = val_balanced_acc
+                else:
                     if val_accuracy > self.best_val_acc:
-                        self.best_val_loss = val_loss
-                        self.best_val_acc = val_accuracy
-                        self.best_val_f1 = val_f1
-                        self.best_val_balanced_acc = val_balanced_acc
                         improved = True
+                        self.best_val_acc = val_accuracy
 
             if improved:
                 self.no_improvement_count = 0
                 self.save_model(
                     f"save_model/best_{self.model_name}_{self.dataset_name}.pth")
-                logging.info(
-                    f"Improved {early_stopping_metric}! Saving model.")
+                if self.adversarial and combined_early_stopping:
+                    logging.info(
+                        f"Improved combined score to {self.best_combined_score:.4f}! Saving model.")
+                else:
+                    logging.info(
+                        f"Improved {early_stopping_metric}! Saving model.")
             else:
                 self.no_improvement_count += 1
                 logging.info(
-                    f"No improvement in {early_stopping_metric} for {self.no_improvement_count} epochs.")
+                    f"No improvement in {early_stopping_metric if not (self.adversarial and combined_early_stopping) else 'combined score'} "
+                    f"for {self.no_improvement_count} epochs.")
 
-            # Only apply early stopping after minimum epochs
+            # Apply early stopping after minimum epochs
+            if self.no_improvement_count >= patience and epoch >= min_epochs:
+                logging.info(
+                    f"Early stopping triggered after {epoch+1} epochs")
+                break
+
+            # Calculate and log epoch metrics
             epoch_acc = correct / total if total > 0 else 0
             adv_accuracy = (
                 adv_correct / total) if (self.adversarial and total > 0) else 0
             avg_adv_loss = (adv_loss_sum / len(self.train_loader)
                             ) if self.adversarial else 0
-            self.adv_metrics.update_adversarial_comparison(phase='train', clean_loss=epoch_loss / len(
-                self.train_loader), clean_acc=epoch_acc, adv_loss=avg_adv_loss, adv_acc=adv_accuracy)
+
+            # Update adversarial metrics tracking
+            self.adv_metrics.update_adversarial_comparison(
+                phase='train',
+                clean_loss=epoch_loss / len(self.train_loader),
+                clean_acc=epoch_acc,
+                adv_loss=avg_adv_loss,
+                adv_acc=adv_accuracy
+            )
+
             if self.adversarial:
                 logging.info(
-                    f'Epoch {epoch+1} Training - Clean: Loss={epoch_loss/len(self.train_loader):.4f}, Acc={epoch_acc:.4f} | Adversarial: Loss={avg_adv_loss:.4f}, Acc={adv_accuracy:.4f}')
+                    f'Epoch {epoch+1} Training - Clean: Loss={epoch_loss/len(self.train_loader):.4f}, Acc={epoch_acc:.4f} | '
+                    f'Adversarial: Loss={avg_adv_loss:.4f}, Acc={adv_accuracy:.4f} | '
+                    f'Weights: Clean={self.adversarial_trainer.clean_weight:.2f}, Adv={self.adversarial_trainer.adv_weight:.2f}'
+                )
             else:
                 logging.info(
                     f'Epoch {epoch+1} Training - Loss={epoch_loss/len(self.train_loader):.4f}, Acc={epoch_acc:.4f}')
+
+            # Update history and visualize adversarial metrics
             self._update_history(epoch, epoch_loss, correct, total, val_loss, val_accuracy,
                                  epoch_true_labels, epoch_predictions, 0)  # duration not used
             self.visualization.visualize_adversarial_training(

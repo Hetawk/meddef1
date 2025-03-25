@@ -284,5 +284,9 @@ python main.py --data chest_xray --task_name normal_training --epochs 100 --trai
 
 python main.py --data chest_xray --task_name normal_training --epochs 100 --train_batch 16 --lr 0.00005 --drop 0.3 --gpu-ids 0 --arch meddef1 --depth '{"meddef1": ["1.0"]}' --pin_memory --weight_decay 1e-4 --adversarial --attack_eps 0.1 --adv_weight 0.5 --initial_adv_weight 0.2 --initial_epsilon 0.03 --epsilon_steps 10 --attack_type pgd --attack_steps 7 --attack_alpha 0.01 
 
+
+
+python main.py --data chest_xray --task_name normal_training --epochs 150 --train_batch 16 --lr 0.00005 --drop 0.3 --gpu-ids 0 --arch meddef1 --depth '{"meddef1": ["1.0"]}' --pin_memory --weight_decay 1e-4 --adversarial --attack_eps 0.1 --adv_weight 0.6 --initial_adv_weight 0.2 --initial_epsilon 0.01 --epsilon_steps 20 --attack_type pgd --attack_steps 10 --attack_alpha 0.005 --dynamic_alpha True --epsilon_schedule cosine --min_epochs 15 --patience 15 --combined_early_stopping True
+
 ```
 

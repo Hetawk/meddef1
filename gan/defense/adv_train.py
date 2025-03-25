@@ -7,6 +7,7 @@ import logging
 import os
 from torchvision.utils import save_image
 import gc
+from utils.robustness.training_config import AdversarialTrainingConfig
 
 
 class AdversarialTraining:
@@ -28,12 +29,23 @@ class AdversarialTraining:
         self.epsilon = self.initial_epsilon  # Start with smaller epsilon
         self.final_epsilon = config.epsilon
         self.epsilon_steps = getattr(config, 'epsilon_steps', 5)
+        self.epsilon_schedule = getattr(
+            config, 'epsilon_schedule', 'cosine')  # New parameter
         self.current_step = 0
 
         # Initialize adv weight scheduling parameters
         self.initial_adv_weight = getattr(config, 'initial_adv_weight', 0.2)
         self.adv_weight = self.initial_adv_weight
         self.final_adv_weight = getattr(config, 'adv_weight', 0.5)
+
+        # Track clean and adv weights separately for loss calculation
+        self.clean_weight = 1.0 - self.adv_weight
+
+        # PGD attack parameters
+        self.attack_steps = getattr(config, 'attack_steps', 7)
+        self.attack_alpha = getattr(config, 'attack_alpha', 0.01)
+        self.dynamic_alpha = getattr(
+            config, 'dynamic_alpha', True)  # New parameter
 
         # Initialize the attack using AttackLoader
         self.attack_loader = AttackLoader(model, config)
@@ -77,76 +89,85 @@ class AdversarialTraining:
         logging.info(f"Adversarial training initialized with:")
         logging.info(f" - Initial epsilon: {self.initial_epsilon}")
         logging.info(f" - Final epsilon: {self.final_epsilon}")
-        logging.info(f" - Epsilon schedule over {self.epsilon_steps} epochs")
+        logging.info(
+            f" - Epsilon schedule: {self.epsilon_schedule} over {self.epsilon_steps} epochs")
         logging.info(f" - Initial adv weight: {self.initial_adv_weight}")
         logging.info(f" - Final adv weight: {self.final_adv_weight}")
+        logging.info(f" - PGD steps: {self.attack_steps}")
+        if self.dynamic_alpha:
+            logging.info(f" - Using dynamic PGD step size (alpha)")
+        else:
+            logging.info(f" - Fixed PGD step size: {self.attack_alpha}")
 
     def update_parameters(self, epoch):
         """Update epsilon and adv_weight according to schedule"""
-        if epoch < self.epsilon_steps:
-            # Gradually increase epsilon from initial to final
-            progress = epoch / self.epsilon_steps
-            self.epsilon = self.initial_epsilon + \
-                (self.final_epsilon - self.initial_epsilon) * progress
-            self.adv_weight = self.initial_adv_weight + \
-                (self.final_adv_weight - self.initial_adv_weight) * progress
-            logging.info(
-                f"Epoch {epoch+1}: Updated adversarial parameters - epsilon={self.epsilon:.4f}, adv_weight={self.adv_weight:.4f}")
-        elif epoch == self.epsilon_steps:
-            # Final values
-            self.epsilon = self.final_epsilon
-            self.adv_weight = self.final_adv_weight
-            logging.info(
-                f"Epoch {epoch+1}: Reached final adversarial parameters - epsilon={self.epsilon:.4f}, adv_weight={self.adv_weight:.4f}")
+        # Use training config helper for more sophisticated scheduling
+        self.epsilon = AdversarialTrainingConfig.get_epsilon_schedule(
+            self.initial_epsilon,
+            self.final_epsilon,
+            self.epsilon_steps,
+            epoch,
+            self.epsilon_schedule
+        )
+
+        # Dynamic alpha calculation based on current epsilon
+        if self.dynamic_alpha:
+            self.attack_alpha = AdversarialTrainingConfig.get_pgd_alpha(
+                self.epsilon,
+                self.attack_steps
+            )
+
+        # Get loss weights that prioritize clean accuracy early, then robustness
+        self.clean_weight, self.adv_weight = AdversarialTrainingConfig.get_combined_loss_weights(
+            epoch,
+            warmup_epochs=min(5, self.epsilon_steps // 2),
+            final_adv_weight=self.final_adv_weight
+        )
+
+        logging.info(
+            f"Epoch {epoch+1}: Updated adversarial parameters - "
+            f"epsilon={self.epsilon:.4f}, "
+            f"alpha={self.attack_alpha:.4f}, "
+            f"clean_weight={self.clean_weight:.2f}, "
+            f"adv_weight={self.adv_weight:.2f}"
+        )
 
     def adversarial_loss(self, data, target, batch_indices=None):
         try:
-            # Existing code remains the same
-
-            # But use the current epsilon value which may be changing per-epoch
+            # Update attack parameters
             if hasattr(self.attack, 'epsilon'):
-                self.attack.epsilon = self.epsilon
+                self.attack.eps = self.epsilon
+            if hasattr(self.attack, 'alpha'):
+                self.attack.alpha = self.attack_alpha
 
-            if self.use_pregenerated and batch_indices is not None:
-                # Ensure batch_indices is a tensor
-                if not isinstance(batch_indices, torch.Tensor):
-                    batch_indices = torch.tensor(batch_indices)
+            # Create tensor that explicitly requires gradients for attack
+            # This is critical - we need to ensure gradients are enabled
+            x = data.clone()
+            x.requires_grad_(True)
 
-                # Modulo operation to wrap indices within available attacks
-                if self.attack_data.data.get('train') is not None:
-                    max_idx = self.attack_data.data['train']['original'].size(
-                        0)
-                    batch_indices = batch_indices % max_idx
-
-                # Try to load pre-generated attacks
-                orig, adv_data, _ = self.attack_data.get_attack_batch(
-                    batch_indices)
-
-                if orig is not None and adv_data is not None:
-                    orig = orig.to(data.device)
-                    adv_data = adv_data.to(data.device)
-                    logging.debug(
-                        f"Using pre-generated attacks (indices {batch_indices[0]}-{batch_indices[-1]})")
+            # For PGD we need to ensure no_grad is not active
+            with torch.enable_grad():
+                # Generate adversarial examples
+                if hasattr(self.attack, 'generate'):
+                    adv_data = self.attack.generate(x, target, self.epsilon)
                 else:
-                    # Fall back to generating attacks if loading fails
-                    orig, adv_data, _ = self.attack.attack(data, target)
-            else:
-                # Generate attacks on-the-fly if no pre-generated attacks available
-                orig, adv_data, _ = self.attack.attack(data, target)
+                    _, adv_data, _ = self.attack.attack(x, target)
+
+            # Forward pass through model with adversarial examples
+            adv_output = self.model(adv_data)
+            adv_loss = self.criterion(adv_output, target)
 
             # Save samples only once
             if not self._attack_samples_saved:
-                self.save_attack_samples(orig, adv_data)
+                self.save_attack_samples(x, adv_data)
                 self._attack_samples_saved = True
-            with torch.cuda.amp.autocast():
-                adv_output = self.model(adv_data)
-                adv_loss = self.criterion(adv_output, target)
+
             return adv_loss
         except Exception as e:
             logging.exception(
                 "Error occurred during adversarial loss calculation:")
             # Return zero loss if adversarial generation fails
-            return torch.tensor(0.0).to(data.device)
+            return torch.tensor(0.0, device=data.device)
 
     def generate_attacks_in_batches(self, loader, split='train', max_samples=None):
         """Generate adversarial examples in batches to manage memory"""
