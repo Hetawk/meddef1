@@ -86,7 +86,8 @@ class TaskHandler:
             input_channels=3,
             num_classes=num_classes,
             task_name=self.args.task_name,
-            dataset_name=dataset_name
+            dataset_name=dataset_name,
+            adversarial=self.args.adversarial  # Add this parameter
         )
 
         if not models_and_names:
@@ -266,7 +267,8 @@ class TaskHandler:
             input_channels=3,
             num_classes=num_classes,
             task_name=self.args.task_name,
-            dataset_name=dataset_name
+            dataset_name=dataset_name,
+            adversarial=self.args.adversarial  # Add this parameter
         )
         if not models_and_names:
             logging.error("No models returned from model loader")

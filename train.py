@@ -21,7 +21,6 @@ from utils.utility import get_model_params
 from utils.weighted_losses import WeightedCrossEntropyLoss, AggressiveMinorityWeightedLoss, DynamicSampleWeightedLoss
 from utils.metrics import Metrics
 from utils.evaluator import Evaluator
-# Changed to import from argument_parser.py
 from argument_parser import parse_args
 import json
 import warnings  # added import
@@ -1215,10 +1214,7 @@ class TrainingManager:
         self._setup_random_seeds(args.manualSeed)
 
         self.model_loader = ModelLoader(
-            args.device, args.arch,
-            getattr(args, 'pretrained', True),
-            getattr(args, 'fp16', False)
-        )
+            args.device, args.arch, pretrained=getattr(args, 'pretrained', True), fp16=getattr(args, 'fp16', False))
         self.dataset_loader = DatasetLoader()
         self.optimizer_loader = OptimizerLoader()
         self.lr_scheduler_loader = LRSchedulerLoader()
@@ -1287,7 +1283,8 @@ class TrainingManager:
                     input_channels=3,
                     num_classes=num_classes,
                     task_name=self.args.task_name,
-                    dataset_name=dataset_name
+                    dataset_name=dataset_name,
+                    adversarial=self.args.adversarial  # Add this parameter
                 )
 
                 # Train each model variation

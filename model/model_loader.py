@@ -16,6 +16,7 @@ from model.attention.MSARNet import MSARNet
 from model.meddef.meddef1 import get_meddef1
 from utils.memory_efficient_model import MemoryEfficientModel
 
+
 class ModelLoader:
     def __init__(self, device, arch, pretrained=True, fp16=False):
         self.device = device
@@ -47,18 +48,45 @@ class ModelLoader:
             return f"{model_name}_{', '.join(map(str, model_depths))}"
         return f"{model_name}_{depth}"
 
-    def get_latest_checkpoint(self, model_name_with_depth, dataset_name, load_task):
-        """Finds the most recent checkpoint for the given model and dataset."""
-        checkpoint_dir = f"out/{load_task}/{dataset_name}/{model_name_with_depth}/save_model"
+    def get_latest_checkpoint(self, model_name_with_depth, dataset_name, load_task, adversarial=False):
+        """Finds the most recent checkpoint for the given model and dataset.
+
+        Args:
+            model_name_with_depth: Formatted model name with depth
+            dataset_name: Name of the dataset
+            load_task: Task name (e.g., 'normal_training', 'attack', 'defense')
+            adversarial: Whether to look for adversarial checkpoints
+        """
+        # Construct path based on whether it's adversarial or normal training
+        if adversarial:
+            checkpoint_dir = f"out/{load_task}/{dataset_name}/{model_name_with_depth}/adv/save_model"
+            logging.info(
+                f"Looking for adversarial checkpoint in: {checkpoint_dir}")
+        else:
+            checkpoint_dir = f"out/{load_task}/{dataset_name}/{model_name_with_depth}/save_model"
+            logging.info(f"Looking for normal checkpoint in: {checkpoint_dir}")
+
         if not os.path.exists(checkpoint_dir):
-            print(
+            logging.info(
                 f"ModelLoader: No checkpoint directory found for {model_name_with_depth} in {checkpoint_dir}")
-            return None
+
+            # If adversarial checkpoint not found, try fallback to non-adversarial
+            if adversarial:
+                fallback_dir = f"out/{load_task}/{dataset_name}/{model_name_with_depth}/save_model"
+                logging.info(
+                    f"Trying fallback to normal checkpoint directory: {fallback_dir}")
+                if os.path.exists(fallback_dir):
+                    checkpoint_dir = fallback_dir
+                    logging.info(f"Using fallback normal checkpoint directory")
+                else:
+                    return None
+            else:
+                return None
 
         checkpoints = [f for f in os.listdir(checkpoint_dir) if f.startswith(
             f"best_{model_name_with_depth}_{dataset_name}")]
         if not checkpoints:
-            print(
+            logging.info(
                 f"ModelLoader: No checkpoints found for {model_name_with_depth} in {checkpoint_dir}")
             return None
 
@@ -66,10 +94,11 @@ class ModelLoader:
         checkpoints.sort(key=lambda x: os.path.getmtime(
             os.path.join(checkpoint_dir, x)), reverse=True)
         latest_checkpoint = checkpoints[0]
+        logging.info(f"Selected checkpoint: {latest_checkpoint}")
         return os.path.join(checkpoint_dir, latest_checkpoint)
 
     def get_model(self, model_name=None, depth=None, input_channels=3, num_classes=None, task_name=None,
-                  dataset_name=None):
+                  dataset_name=None, adversarial=False):
         """Retrieves model(s) based on specified architecture, depth, and configurations."""
         model_name = model_name or self.arch
 
@@ -110,7 +139,7 @@ class ModelLoader:
                 # Create or load model
                 model = self._create_or_load_model(
                     model_func, filtered_kwargs, model_name_with_depth,
-                    task_name, dataset_name
+                    task_name, dataset_name, adversarial
                 )
 
                 models_and_names.append((model, model_name_with_depth))
@@ -129,16 +158,16 @@ class ModelLoader:
             model_name_with_depth = self._format_model_name(model_name, depth)
             model = self._create_or_load_model(
                 model_func, filtered_kwargs, model_name_with_depth,
-                task_name, dataset_name
+                task_name, dataset_name, adversarial
             )
             return [(model, model_name_with_depth)]
 
-    def _create_or_load_model(self, model_func, kwargs, model_name_with_depth, task_name, dataset_name):
+    def _create_or_load_model(self, model_func, kwargs, model_name_with_depth, task_name, dataset_name, adversarial=False):
         """Helper method to create or load a single model"""
         model = None
         if task_name and dataset_name:
             checkpoint_path = self.get_latest_checkpoint(
-                model_name_with_depth, dataset_name, task_name)
+                model_name_with_depth, dataset_name, task_name, adversarial)
             if checkpoint_path:
                 # Load from checkpoint
                 # Load the checkpoint to CPU first to avoid OOM issues
@@ -152,7 +181,7 @@ class ModelLoader:
                     new_state_dict[new_key] = v
                 model.load_state_dict(new_state_dict)
                 logging.info(
-                    f"Loaded pretrained model from checkpoint: {checkpoint_path}")
+                    f"Loaded {'adversarial' if adversarial else 'normal'} pretrained model from checkpoint: {checkpoint_path}")
                 # Free memory before moving the model to device
                 import gc
                 gc.collect()
@@ -193,7 +222,7 @@ class ModelLoader:
             self.recursive_set_param(
                 getattr(model, key_parts[0]), key_parts[1:], param)
 
-    def load_pretrained_model(self, model_name, load_task, dataset_name, depth=None, input_channels=3, num_classes=None):
+    def load_pretrained_model(self, model_name, load_task, dataset_name, depth=None, input_channels=3, num_classes=None, adversarial=False):
         """Loads a pretrained model, specified by architecture, depth, and task-related information."""
         model, model_name_with_depth = self.get_model(
             model_name=model_name,
@@ -201,7 +230,8 @@ class ModelLoader:
             input_channels=input_channels,
             num_classes=num_classes,
             task_name=load_task,
-            dataset_name=dataset_name
+            dataset_name=dataset_name,
+            adversarial=adversarial
         )[0]
 
         if torch.cuda.is_available() and torch.cuda.device_count() > 1:
@@ -213,7 +243,7 @@ class ModelLoader:
 
         return model
 
-    def load_multiple_models(self, model_name, depths, input_channels=3, num_classes=None, task_name=None, dataset_name=None):
+    def load_multiple_models(self, model_name, depths, input_channels=3, num_classes=None, task_name=None, dataset_name=None, adversarial=False):
         """Loads multiple models of the same architecture but different depths, as specified."""
         models = {}
         for depth in depths:
@@ -224,7 +254,8 @@ class ModelLoader:
                     input_channels=input_channels,
                     num_classes=num_classes,
                     task_name=task_name,
-                    dataset_name=dataset_name
+                    dataset_name=dataset_name,
+                    adversarial=adversarial
                 )[0]
                 models[depth] = model
                 logging.info(
