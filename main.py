@@ -63,7 +63,7 @@ def main():
     else:
         mp.set_start_method('forkserver')
 
-    args = parse_args()
+    args = parse_args()  # Remove the mode parameter
     setup_environment(args)
     torch.cuda.empty_cache()
 

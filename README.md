@@ -288,5 +288,32 @@ python main.py --data chest_xray --task_name normal_training --epochs 100 --trai
 
 python main.py --data chest_xray --task_name normal_training --epochs 150 --train_batch 16 --lr 0.00005 --drop 0.3 --gpu-ids 0 --arch meddef1 --depth '{"meddef1": ["1.0"]}' --pin_memory --weight_decay 1e-4 --adversarial --attack_eps 0.1 --adv_weight 0.6 --initial_adv_weight 0.2 --initial_epsilon 0.01 --epsilon_steps 20 --attack_type pgd --attack_steps 10 --attack_alpha 0.005 --dynamic_alpha True --epsilon_schedule cosine --min_epochs 15 --patience 15 --combined_early_stopping True
 
+
+
+python main.py --data chest_xray --task_name normal_training --epochs 150 --train_batch 32 --lr 0.00003 --drop 0.3 --gpu-ids 0 --arch meddef1 --depth "{'meddef1': [1.0]}" --pin_memory --weight_decay 1e-4 --adversarial --attack_eps 0.05 --adv_weight 0.5 --initial_adv_weight 0.3 --initial_epsilon 0.02 --epsilon_steps 30 --attack_type pgd --attack_steps 15 --attack_alpha 0.003 --max_grad_norm 1.0 --epsilon_schedule linear --min_epochs 15 --patience 20
+
 ```
 
+
+
+```bash
+
+
+
+python main.py --data chest_xray --task_name robust_training --epochs 100 --train_batch 16 --lr 0.00005 --drop 0.3 --gpu-ids 0 --arch meddef1 --depth "{'meddef1': [1.0]}" --pin_memory --weight_decay 1e-4 --adversarial --attack_eps 0.04 --adv_weight 0.5 --initial_adv_weight 0.2 --attack_type pgd --attack_steps 15 --use_anfis --adaptive_schedule
+
+
+python main.py --data chest_xray --task_name normal_training --epochs 100 --train_batch 16 --lr 0.00005 --drop 0.3 --gpu-ids 0 --arch meddef1 --depth "{'meddef1': [1.0]}" --pin_memory --weight_decay 1e-4 --adversarial --attack_eps 0.04 --adv_weight 0.5 --initial_adv_weight 0.2 --attack_type pgd --attack_steps 15 --use_anfis --adaptive_schedule
+
+
+
+
+python test.py --data chest_xray --arch meddef1 --depth "{'meddef1': [1.0]}" --model_path "out/normal_training/chest_xray/meddef1_1.0/adv/save_model/best_meddef1_1.0_chest_xray_epochs100_lr5e-05_batch16_20250327.pth" --image_path "out/normal_training/chest_xray/meddef1_1.0/attack/pgd/sample_4_orig.png" --task_name normal_training --adversarial --attack_type pgd --attack_eps 0.04 --show_heatmap
+
+
+python test.py --data chest_xray --arch meddef1 --depth "{'meddef1': [1.0]}" --model_path "out/normal_training/chest_xray/meddef1_1.0/adv/save_model/best_meddef1_1.0_chest_xray_epochs100_lr5e-05_batch16_20250327.pth" --task_name normal_training --adversarial --attack_type pgd --attack_eps 0.04 --evaluate_robustness
+
+
+python test.py --data chest_xray --arch meddef1 --depth 1.0 --model_path "out/normal_training/chest_xray/meddef1_1.0/adv/save_model/best_meddef1_1.0_chest_xray_epochs100_lr5e-05_batch16_20250327.pth" --task_name normal_training
+
+```

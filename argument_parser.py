@@ -6,23 +6,16 @@ import logging  # Use Python's standard logging module instead
 
 import torch
 
-# Remove the problematic import and configure standard logging
-# from utils import logger
-
 # Suppressing FutureWarnings that might come from argument parsing
 warnings.filterwarnings("ignore", category=FutureWarning)
 
 
-def parse_args(mode='train'):
-    """Parse command line arguments based on mode (train or test)
-
-    Args:
-        mode: Either 'train' or 'test' to determine which arguments to include
-    """
+def parse_args():
+    """Parse command line arguments with a unified argument set"""
     parser = argparse.ArgumentParser(
-        description='Training/Testing Configuration')
+        description='MedDef Training/Testing Configuration')
 
-    # Dataset and processing - Always required basic arguments
+    # Dataset and processing arguments
     parser.add_argument('--data', nargs='+', required=True, type=str,
                         help='Dataset names to process')
     parser.add_argument('--num_workers', type=int, default=4,
@@ -30,7 +23,7 @@ def parse_args(mode='train'):
     parser.add_argument('--pin_memory', action='store_true',
                         help='Use pinned memory')
 
-    # Model architecture - Basic required arguments
+    # Model architecture arguments
     parser.add_argument('--arch', '-a', nargs='+', default=['meddef1', 'resnet', 'densenet'],
                         help='Architecture(s) to use. Provide one or multiple values. Separate multiple names with space or comma.')
     parser.add_argument('--depth', type=str, default='{"meddef1": [1.0, 1.1], "resnet": [18, 34], "densenet": [121]}',
@@ -52,144 +45,144 @@ def parse_args(mode='train'):
     parser.add_argument('--manualSeed', type=int, default=None,
                         help='manual seed for reproducibility')
 
-    if mode == 'train':
-        # Basic training parameters - Core parameters always enabled
-        parser.add_argument('--train_batch', type=int, default=32,
-                            help='Training batch size')
-        parser.add_argument('--test_batch', type=int, default=32,
-                            help='Test/Val batch size')
-        parser.add_argument('--epochs', type=int, default=100,
-                            help='Number of epochs')
-        parser.add_argument('--lr', type=float, default=0.001,
-                            help='Learning rate')
+    # Training parameters
+    parser.add_argument('--train_batch', type=int, default=32,
+                        help='Training batch size')
+    parser.add_argument('--test_batch', type=int, default=32,
+                        help='Test/Val batch size')
+    parser.add_argument('--batch_size', type=int, default=32,
+                        help='Batch size for testing')
+    parser.add_argument('--epochs', type=int, default=100,
+                        help='Number of epochs')
+    parser.add_argument('--lr', type=float, default=0.001,
+                        help='Learning rate')
 
-        # Loss function options
-        parser.add_argument('--loss_type', type=str, default='standard',
-                            choices=['standard', 'weighted',
-                                     'aggressive', 'dynamic'],
-                            help='Type of loss function to use for handling class imbalance')
-        parser.add_argument('--focal_alpha', type=float, default=0.5,
-                            help='Alpha parameter for focal loss in dynamic sample weighting')
-        parser.add_argument('--focal_gamma', type=float, default=2.0,
-                            help='Base gamma parameter for focal loss in dynamic sample weighting')
+    # Loss function options
+    parser.add_argument('--loss_type', type=str, default='standard',
+                        choices=['standard', 'weighted',
+                                 'aggressive', 'dynamic'],
+                        help='Type of loss function to use for handling class imbalance')
+    parser.add_argument('--focal_alpha', type=float, default=0.5,
+                        help='Alpha parameter for focal loss in dynamic sample weighting')
+    parser.add_argument('--focal_gamma', type=float, default=2.0,
+                        help='Base gamma parameter for focal loss in dynamic sample weighting')
 
-        # Early stopping configuration
-        parser.add_argument('--patience', type=int, default=15,  # Changed back to 15 from 10
-                            help='Patience for early stopping (max 20)')
-        parser.add_argument('--min_epochs', type=int, default=0,
-                            help='Minimum epochs to train regardless of early stopping')
-        parser.add_argument('--early_stopping_metric', type=str, default='loss',
-                            choices=['loss', 'accuracy', 'f1', 'balanced_acc'],
-                            help='Metric to monitor for early stopping')
+    # Early stopping configuration
+    parser.add_argument('--patience', type=int, default=25,
+                        help='Patience for early stopping (max 25)')
+    parser.add_argument('--min_epochs', type=int, default=0,
+                        help='Minimum epochs to train regardless of early stopping')
+    parser.add_argument('--early_stopping_metric', type=str, default='loss',
+                        choices=['loss', 'accuracy', 'f1', 'balanced_acc'],
+                        help='Metric to monitor for early stopping')
 
-        # Regularization parameters
-        parser.add_argument('--drop', type=float, default=0.3,
-                            help='Dropout rate')
-        parser.add_argument('--weight_decay', type=float, default=1e-4,
-                            help='Weight decay')
-        parser.add_argument('--lambda_l2', type=float, default=1e-4,
-                            help='L2 regularization strength')
+    # Regularization parameters
+    parser.add_argument('--drop', type=float, default=0.3,
+                        help='Dropout rate')
+    parser.add_argument('--weight_decay', type=float, default=1e-4,
+                        help='Weight decay')
+    parser.add_argument('--lambda_l2', type=float, default=1e-4,
+                        help='L2 regularization strength')
 
-        # Training control
-        parser.add_argument('--accumulation_steps', type=int, default=1,
-                            help='Gradient accumulation steps')
-        parser.add_argument('--max_grad_norm', type=float, default=1.0,
-                            help='Max gradient norm')
+    # Training control
+    parser.add_argument('--accumulation_steps', type=int, default=1,
+                        help='Gradient accumulation steps')
+    parser.add_argument('--max_grad_norm', type=float, default=1.0,
+                        help='Max gradient norm')
 
-        # Optimizer options - Set SGD as default
-        parser.add_argument('--optimizer', type=str, default='adam',
-                            choices=['adam', 'sgd', 'rmsprop', 'adagrad'],
-                            help='Optimizer to use for training')
+    # Optimizer options
+    parser.add_argument('--optimizer', type=str, default='adam',
+                        choices=['adam', 'sgd', 'rmsprop', 'adagrad'],
+                        help='Optimizer to use for training')
 
-        # Scheduler options
-        parser.add_argument('--scheduler', type=str, default='StepLR',
-                            choices=['StepLR', 'ExponentialLR', 'ReduceLROnPlateau',
-                                     'CosineAnnealingLR', 'CosineAnnealingWarmRestarts', 'OneCycleLR', 'none'],
-                            help='Learning rate scheduler')
-        parser.add_argument('--lr_step', type=int, default=30,
-                            help='Step size for StepLR scheduler')
-        parser.add_argument('--lr_gamma', type=float, default=0.1,
-                            help='Gamma for learning rate scheduler')
-        parser.add_argument('--lr_patience', type=int, default=10,
-                            help='Patience for ReduceLROnPlateau scheduler')
+    # Scheduler options
+    parser.add_argument('--scheduler', type=str, default='StepLR',
+                        choices=['StepLR', 'ExponentialLR', 'ReduceLROnPlateau',
+                                 'CosineAnnealingLR', 'CosineAnnealingWarmRestarts', 'OneCycleLR', 'none'],
+                        help='Learning rate scheduler')
+    parser.add_argument('--lr_step', type=int, default=30,
+                        help='Step size for StepLR scheduler')
+    parser.add_argument('--lr_gamma', type=float, default=0.1,
+                        help='Gamma for learning rate scheduler')
+    parser.add_argument('--lr_patience', type=int, default=10,
+                        help='Patience for ReduceLROnPlateau scheduler')
 
-        # Adversarial training options - CONSOLIDATED SECTION
-        parser.add_argument('--adversarial', action='store_true',
-                            help='Enable adversarial training/testing')
-        parser.add_argument('--attack_type', type=str, nargs='+',
-                            default=['fgsm'],
-                            choices=['fgsm', 'pgd', 'bim', 'jsma'],
-                            help='Type(s) of attack for adversarial training/testing. Can specify multiple attacks.')
-        parser.add_argument('--attack_eps', type=float, default=0.1,
-                            help='Final epsilon for adversarial attacks (default: 0.1)')
-        parser.add_argument('--initial_epsilon', type=float, default=None,
-                            help='Initial epsilon for progressive adversarial training (default: attack_eps/3)')
-        parser.add_argument('--epsilon_steps', type=int, default=5,
-                            help='Number of epochs to increase epsilon over (default: 5)')
-        parser.add_argument('--adv_weight', type=float, default=0.5,
-                            help='Final weight for adversarial loss (default: 0.5)')
-        parser.add_argument('--initial_adv_weight', type=float, default=0.2,
-                            help='Initial weight for adversarial loss (default: 0.2)')
-        parser.add_argument('--attack_alpha', type=float, default=0.01,
-                            help='Step size for PGD attack')
-        parser.add_argument('--attack_steps', type=int, default=10,
-                            help='Number of steps for PGD attack')
-        parser.add_argument('--adv_init_mag', type=float, default=0.01,
-                            help='Initial magnitude for adversarial perturbation')
-        parser.add_argument('--save_attacks', action='store_true',
-                            help='Save generated adversarial samples')
+    # Adversarial options - unified for both training and testing
+    parser.add_argument('--adversarial', action='store_true',
+                        help='Enable adversarial training/testing')
+    parser.add_argument('--attack_type', type=str, nargs='+',
+                        default=['fgsm'],
+                        choices=['fgsm', 'pgd', 'bim', 'jsma'],
+                        help='Type(s) of attack. Can specify multiple attacks.')
+    parser.add_argument('--attack_eps', type=float, default=0.1,
+                        help='Epsilon for adversarial attacks')
+    parser.add_argument('--initial_epsilon', type=float, default=None,
+                        help='Initial epsilon for progressive adversarial training')
+    parser.add_argument('--epsilon_steps', type=int, default=5,
+                        help='Number of epochs to increase epsilon over')
+    parser.add_argument('--adv_weight', type=float, default=0.5,
+                        help='Final weight for adversarial loss')
+    parser.add_argument('--initial_adv_weight', type=float, default=0.2,
+                        help='Initial weight for adversarial loss')
+    parser.add_argument('--attack_alpha', type=float, default=0.01,
+                        help='Step size for iterative attacks')
+    parser.add_argument('--attack_steps', type=int, default=10,
+                        help='Number of steps for iterative attacks')
+    parser.add_argument('--adv_init_mag', type=float, default=0.01,
+                        help='Initial magnitude for adversarial perturbation')
+    parser.add_argument('--save_attacks', action='store_true',
+                        help='Save generated adversarial samples')
 
-        # NEW: Add the missing adversarial training arguments
-        parser.add_argument('--dynamic_alpha', type=lambda x: x.lower() == 'true',
-                            default=True,
-                            help='Dynamically adjust alpha based on epsilon (default: True)')
-        parser.add_argument('--epsilon_schedule', type=str, default='linear',
-                            choices=['linear', 'exponential', 'cosine'],
-                            help='Schedule for epsilon progression (default: linear)')
-        parser.add_argument('--combined_early_stopping', type=lambda x: x.lower() == 'true',
-                            default=False,
-                            help='Use combined clean and adversarial metrics for early stopping (default: False)')
+    # Adversarial training specific arguments
+    parser.add_argument('--dynamic_alpha', type=lambda x: x.lower() == 'true',
+                        default=True,
+                        help='Dynamically adjust alpha based on epsilon (default: True)')
+    parser.add_argument('--epsilon_schedule', type=str, default='linear',
+                        choices=['linear', 'exponential', 'cosine'],
+                        help='Schedule for epsilon progression (default: linear)')
+    parser.add_argument('--combined_early_stopping', type=lambda x: x.lower() == 'true',
+                        default=False,
+                        help='Use combined clean and adversarial metrics for early stopping')
+    parser.add_argument('--adaptive_schedule', action='store_true',
+                        help='Use adaptive three-phase training schedule')
 
-        # Defense task options
-        parser.add_argument('--prune_rate', type=float, default=0.3,
-                            help='Pruning rate for defense task')
+    # ANFIS options
+    parser.add_argument('--use_anfis', action='store_true',
+                        help='Enable ANFIS for adversarial training')
+    parser.add_argument('--anfis_sensitivity_weight', type=float, default=0.7,
+                        help='Weight for sensitivity component in ANFIS')
+    parser.add_argument('--anfis_perturbation_weight', type=float, default=0.3,
+                        help='Weight for perturbation magnitude component in ANFIS')
 
-        # Add option to run a quick test after training
-        parser.add_argument('--quick_test_after_training', action='store_true',
-                            help='Run a quick test evaluation after training completes')
+    # Defense task options
+    parser.add_argument('--prune_rate', type=float, default=0.3,
+                        help='Pruning rate for defense task')
 
-    elif mode == 'test':
-        # Testing specific parameters
-        parser.add_argument('--batch_size', type=int, default=32,
-                            help='Batch size for testing')
-        parser.add_argument('--model_path', type=str, required=True,
-                            help='Path to saved model weights')
-        parser.add_argument('--output_dir', type=str, default='test_results',
-                            help='Directory to save test results')
-        parser.add_argument('--save_predictions', action='store_true',
-                            help='Save model predictions')
-        parser.add_argument('--evaluate_robustness', action='store_true',
-                            help='Evaluate model robustness to adversarial attacks')
-        parser.add_argument('--confidence_threshold', type=float, default=0.0,
-                            help='Confidence threshold for predictions')
-        parser.add_argument('--fp16', action='store_true',
-                            help='Use half precision for inference')
-        parser.add_argument('--per_class_metrics', action='store_true',
-                            help='Calculate per-class metrics')
+    # Testing specific arguments
+    parser.add_argument('--model_path', type=str, default=None,
+                        help='Path to saved model weights')
+    parser.add_argument('--output_dir', type=str, default='out',
+                        help='Base directory for outputs (default: out)')
+    parser.add_argument('--save_predictions', action='store_true',
+                        help='Save model predictions')
+    parser.add_argument('--evaluate_robustness', action='store_true',
+                        help='Evaluate model robustness to adversarial attacks')
+    parser.add_argument('--confidence_threshold', type=float, default=0.0,
+                        help='Confidence threshold for predictions')
+    parser.add_argument('--fp16', action='store_true',
+                        help='Use half precision for inference')
+    parser.add_argument('--per_class_metrics', action='store_true',
+                        help='Calculate per-class metrics')
 
-        # Adversarial options
-        parser.add_argument('--adversarial', action='store_true',
-                            help='Enable adversarial training/testing')
-        parser.add_argument('--attack_type', type=str, nargs='+',
-                            default=['fgsm'],
-                            choices=['fgsm', 'pgd', 'bim', 'jsma'],
-                            help='Type(s) of attack for adversarial training/testing. Can specify multiple attacks.')
-        parser.add_argument('--attack_eps', type=float, default=0.3,
-                            help='Epsilon for adversarial attacks')
-        parser.add_argument('--attack_alpha', type=float, default=0.01,
-                            help='Alpha for adversarial attacks')
-        parser.add_argument('--attack_steps', type=int, default=40,
-                            help='Number of steps for iterative attacks')
+    # Single image testing parameters
+    parser.add_argument('--image_path', type=str, default=None,
+                        help='Path to a single image for testing')
+    parser.add_argument('--show_heatmap', action='store_true',
+                        help='Generate attention heatmap for visualization')
+
+    # Final training option
+    parser.add_argument('--quick_test_after_training', action='store_true',
+                        help='Run a quick test evaluation after training completes')
 
     args = parser.parse_args()
 
@@ -230,7 +223,6 @@ def parse_args(mode='train'):
                         value = ast.literal_eval(value_str)
                     except (ValueError, SyntaxError):
                         # If all else fails, just treat it as a string list with quotes
-                        # This handles cases like ["tiny"] where tiny is supposed to be a string
                         value_str = value_str.strip('[]')
                         value = [v.strip().strip('"\'')
                                  for v in value_str.split(',')]
@@ -242,12 +234,11 @@ def parse_args(mode='train'):
                     f"Please use valid JSON format like: --depth '{{\"transformer\": [\"tiny\"]}}'")
                 raise
 
-    # Ensure patience doesn't exceed 20
-    if mode == 'train' and hasattr(args, 'patience'):
-        if args.patience > 20:
-            logging.warning(
-                f"Patience value {args.patience} exceeds maximum (20). Setting to 20.")
-            args.patience = 20
+    # Ensure patience doesn't exceed maximum
+    if hasattr(args, 'patience') and args.patience > 25:
+        logging.warning(
+            f"Patience value {args.patience} exceeds maximum (25). Setting to 25.")
+        args.patience = 25
 
     # Configure CUDA devices
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_ids

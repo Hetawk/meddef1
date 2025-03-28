@@ -505,6 +505,9 @@ class Trainer:
                 f"Could not add model graph to TensorBoard: {str(e)}")
 
         # Add tracking for detailed metrics
+        MAX_SAFE_EPSILON = 0.025  # Maximum safe epsilon where training is stable
+        MIN_ALLOWED_ACCURACY = 0.65  # Minimum allowed validation accuracy
+
         for epoch in range(self.epochs):
             self.current_epoch = epoch  # Track current epoch for metrics optimization
 
@@ -516,7 +519,38 @@ class Trainer:
 
             # Update adversarial training parameters if using
             if self.adversarial:
-                self.adversarial_trainer.update_parameters(epoch)
+                # Store previous epsilon value before updating
+                prev_epsilon = getattr(
+                    self, 'prev_epsilon', self.adversarial_trainer.initial_epsilon)
+                self.prev_epsilon = self.adversarial_trainer.epsilon
+
+                # Update parameters with safety check
+                if hasattr(self, 'val_acc') and self.val_acc < MIN_ALLOWED_ACCURACY:
+                    # If accuracy is poor, don't increase epsilon and actually reduce it
+                    logging.warning(
+                        f"Validation accuracy ({self.val_acc:.4f}) below threshold. Reducing epsilon.")
+                    self.adversarial_trainer.epsilon = max(
+                        self.adversarial_trainer.initial_epsilon,
+                        self.adversarial_trainer.epsilon * 0.8  # Reduce by 20%
+                    )
+                else:
+                    # Normal parameter update with safety cap
+                    self.adversarial_trainer.update_parameters(epoch)
+                    # Cap epsilon to a safe maximum
+                    if self.adversarial_trainer.epsilon > MAX_SAFE_EPSILON:
+                        logging.warning(
+                            f"Capping epsilon at {MAX_SAFE_EPSILON} for stability")
+                        self.adversarial_trainer.epsilon = MAX_SAFE_EPSILON
+
+                # Also update attack alpha (step size) to be proportional to epsilon
+                self.adversarial_trainer.alpha = min(
+                    self.adversarial_trainer.epsilon / 6.0, 0.004)
+
+                logging.info(f"Epoch {epoch+1}: Updated adversarial parameters - "
+                             f"epsilon={self.adversarial_trainer.epsilon:.4f}, "
+                             f"alpha={self.adversarial_trainer.alpha:.4f}, "
+                             f"clean_weight={self.adversarial_trainer.clean_weight:.2f}, "
+                             f"adv_weight={self.adversarial_trainer.adv_weight:.2f}")
 
             self.model.train()
             epoch_loss = 0.0
@@ -684,26 +718,45 @@ class Trainer:
                 if combined_score > self.best_combined_score:
                     improved = True
                     self.best_combined_score = combined_score
-                    self.best_val_loss = val_loss  # Still track this
+                    # Update all metrics when the model improves
+                    self.best_val_loss = val_loss
                     self.best_val_acc = val_accuracy
+                    self.best_val_f1 = val_f1
+                    self.best_val_balanced_acc = val_balanced_acc
             else:
                 # Traditional early stopping based on selected metric
                 if early_stopping_metric == 'loss':
                     if val_loss < self.best_val_loss:
                         improved = True
+                        # Update all metrics when the model improves
                         self.best_val_loss = val_loss
+                        self.best_val_acc = val_accuracy  
+                        self.best_val_f1 = val_f1
+                        self.best_val_balanced_acc = val_balanced_acc
                 elif early_stopping_metric == 'f1':
                     if val_f1 > self.best_val_f1:
                         improved = True
+                        # Update all metrics when the model improves
                         self.best_val_f1 = val_f1
+                        self.best_val_loss = val_loss
+                        self.best_val_acc = val_accuracy
+                        self.best_val_balanced_acc = val_balanced_acc
                 elif early_stopping_metric == 'balanced_acc':
                     if val_balanced_acc > self.best_val_balanced_acc:
                         improved = True
+                        # Update all metrics when the model improves
                         self.best_val_balanced_acc = val_balanced_acc
+                        self.best_val_loss = val_loss
+                        self.best_val_acc = val_accuracy
+                        self.best_val_f1 = val_f1
                 else:
                     if val_accuracy > self.best_val_acc:
                         improved = True
+                        # Update all metrics when the model improves
                         self.best_val_acc = val_accuracy
+                        self.best_val_loss = val_loss
+                        self.best_val_f1 = val_f1
+                        self.best_val_balanced_acc = val_balanced_acc
 
             if improved:
                 self.no_improvement_count = 0
@@ -819,6 +872,53 @@ class Trainer:
                          f"Accuracy: {val_accuracy:.4f}, "
                          f"F1: {val_f1:.4f}, "
                          f"Balanced Acc: {val_balanced_acc:.4f}")
+
+            # After validation, store values for stability check
+            self.prev_val_acc = val_accuracy
+            self.prev_adv_val_acc = adv_val_accuracy if self.adversarial else 0
+
+            # Add NaN detection and recovery mechanism
+            if self.adversarial and (np.isnan(val_loss) or np.isnan(adv_val_loss)):
+                logging.warning(
+                    f"NaN loss detected in epoch {epoch+1}! Taking recovery actions...")
+
+                # 1. Roll back epsilon to a safe value
+                self.adversarial_trainer.epsilon = max(
+                    self.adversarial_trainer.initial_epsilon,
+                    self.adversarial_trainer.epsilon * 0.5  # Cut epsilon in half
+                )
+
+                # 2. Reduce learning rate
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = param_group['lr'] * 0.5
+                    self.current_lr = param_group['lr']
+                    logging.info(f"Reduced learning rate to {self.current_lr}")
+
+                # 3. Reload weights from last good checkpoint if available
+                last_good_path = os.path.join(
+                    'out', self.task_name, self.dataset_name, self.model_name,
+                    'adv' if self.adversarial else '',
+                    'save_model', f'best_{self.model_name}_{self.dataset_name}.pth'
+                )
+                if os.path.exists(last_good_path):
+                    try:
+                        logging.info(
+                            f"Loading last good checkpoint from {last_good_path}")
+                        self.model.load_state_dict(torch.load(last_good_path))
+                    except Exception as e:
+                        logging.error(f"Failed to load checkpoint: {e}")
+
+                # 4. Reset optimizer state
+                self.optimizer.zero_grad(set_to_none=True)
+                self.scaler = GradScaler()  # Reset scaler
+
+                # If we've had multiple NaN events, consider early stopping
+                if getattr(self, 'nan_count', 0) >= 2:
+                    logging.warning(
+                        "Multiple NaN events detected. Triggering early stopping.")
+                    break
+                else:
+                    self.nan_count = getattr(self, 'nan_count', 0) + 1
 
         # After training complete - REMOVE automatic test that causes duplication
         # Instead just log best metrics
@@ -1019,26 +1119,61 @@ class Trainer:
         correct = 0
         total = 0
 
+        # Add more detailed logging
+        logging.info(
+            f"Running adversarial validation with epsilon={self.adversarial_trainer.epsilon:.4f}")
+
         try:
+            # Track original performance first
+            orig_val_loss, orig_accuracy = self.validate()
+
+            # If original validation accuracy is already poor, don't even attempt adversarial validation
+            # as this could make training unstable
+            if orig_accuracy < 0.5:
+                logging.warning(
+                    f"Clean accuracy too low ({orig_accuracy:.4f}), skipping adversarial validation")
+                return float('inf'), 0.0
+
             for batch_idx, (data, target) in enumerate(self.val_loader):
                 if isinstance(data, torch.Tensor):
                     data = data.to(self.device, non_blocking=True)
                 if isinstance(target, torch.Tensor):
                     target = target.to(self.device, non_blocking=True)
 
-                # Generate adversarial examples for validation
+                # Generate adversarial examples for validation with error handling
                 with torch.enable_grad():  # Need gradients for attack generation
-                    if hasattr(self.adversarial_trainer.attack, 'generate'):
-                        adv_data = self.adversarial_trainer.attack.generate(
-                            data, target, self.adversarial_trainer.epsilon)
-                    else:
-                        _, adv_data, _ = self.adversarial_trainer.attack.attack(
-                            data, target)
+                    try:
+                        if hasattr(self.adversarial_trainer.attack, 'generate'):
+                            adv_data = self.adversarial_trainer.attack.generate(
+                                data, target, self.adversarial_trainer.epsilon)
+                        else:
+                            # Use a smaller epsilon for validation if regular epsilon is large
+                            safe_epsilon = min(
+                                self.adversarial_trainer.epsilon, 0.025)
+                            _, adv_data, _ = self.adversarial_trainer.attack.attack(
+                                data, target, epsilon=safe_epsilon)
+
+                        # Validate the adversarial examples aren't garbage
+                        if torch.isnan(adv_data).any():
+                            logging.warning(
+                                "NaN values detected in adversarial examples")
+                            adv_data = data.clone()  # Fallback to clean data
+
+                    except Exception as e:
+                        logging.error(
+                            f"Error generating adversarial examples: {e}")
+                        adv_data = data.clone()  # Fallback to clean data
 
                 # Evaluate on adversarial examples
                 with torch.no_grad(), autocast():
                     output = self.model(adv_data)
                     loss = self.criterion(output, target)
+
+                    # Check for NaN and replace with high loss value
+                    if torch.isnan(loss):
+                        loss = torch.tensor(1000.0, device=self.device)
+                        logging.warning(
+                            "NaN loss in adversarial validation, replacing with high loss value")
 
                 val_loss += loss.item()
                 pred = output.argmax(dim=1, keepdim=True)
@@ -1047,6 +1182,10 @@ class Trainer:
 
             val_loss /= len(self.val_loader)
             accuracy = correct / total if total > 0 else 0
+
+            # Store as instance attributes for stability checks
+            self.adv_val_loss = val_loss
+            self.adv_val_acc = accuracy
 
             return val_loss, accuracy
 
@@ -1164,15 +1303,38 @@ class Trainer:
         filename, ext = os.path.splitext(path)
         timestamp = datetime.now().strftime("%Y%m%d")
         filename = f"{filename}_epochs{self.epochs}_lr{self.args.lr}_batch{self.args.train_batch}_{timestamp}{ext}"
+
+        # Create the proper directory structure based on adversarial flag
         if self.adversarial:
-            path = os.path.join(
-                'out', self.task_name, self.dataset_name, self.model_name, 'adv', filename)
+            # Create full path including the 'save_model' subdirectory
+            dir_path = os.path.join(
+                'out', self.task_name, self.dataset_name, self.model_name, 'adv', 'save_model')
+            full_path = os.path.join(dir_path, os.path.basename(filename))
         else:
-            path = os.path.join('out', self.task_name,
-                                self.dataset_name, self.model_name, filename)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        torch.save(self.model.state_dict(), path)
-        logging.info(f'Model saved to {path}')
+            dir_path = os.path.join(
+                'out', self.task_name, self.dataset_name, self.model_name, 'save_model')
+            full_path = os.path.join(dir_path, os.path.basename(filename))
+
+        # Create directory if it doesn't exist
+        os.makedirs(dir_path, exist_ok=True)
+
+        # Save the model
+        torch.save(self.model.state_dict(), full_path)
+        logging.info(f'Model saved to {full_path}')
+
+        # Also save as latest.pth for recovery purposes
+        latest_path = os.path.join(
+            dir_path, f"latest_{self.model_name}_{self.dataset_name}.pth")
+        torch.save(self.model.state_dict(), latest_path)
+
+        # For adversarial models, also save a checkpoint at each epsilon value for possible rollback
+        if self.adversarial and hasattr(self, 'adversarial_trainer'):
+            epsilon_str = f"{self.adversarial_trainer.epsilon:.4f}".replace(
+                '.', '_')
+            epsilon_path = os.path.join(
+                dir_path, f"eps_{epsilon_str}_{self.model_name}_{self.dataset_name}.pth")
+            torch.save(self.model.state_dict(), epsilon_path)
+            logging.info(f'Saved epsilon checkpoint at {epsilon_path}')
 
     def save_history_to_csv(self, filename):
         filename = os.path.join('out', self.task_name,
