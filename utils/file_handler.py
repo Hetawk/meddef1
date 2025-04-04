@@ -77,3 +77,38 @@ class FileHandler:
         model.eval()
         logging.info(f"Loaded model from {path}")
         return model
+
+    @staticmethod
+    def suppress_warnings():
+        """Suppress common matplotlib and other warnings for cleaner output"""
+        import warnings
+
+        # Create a function to ignore all warnings
+        def ignore_all_warnings():
+            # PyTorch Named Tensors warning (which comes from max_pool2d)
+            warnings.filterwarnings("ignore", category=UserWarning,
+                                    message=".*Named tensors.*")
+
+            # Empty data warnings
+            warnings.filterwarnings("ignore", category=UserWarning,
+                                    message=".*Empty data for model.*")
+
+            # Matplotlib categorical warnings
+            warnings.filterwarnings("ignore", category=UserWarning,
+                                    module="matplotlib.*",
+                                    message=".*categorical units.*")
+
+            # Additional matplotlib warnings
+            warnings.filterwarnings("ignore", category=UserWarning,
+                                    module="matplotlib.*")
+
+            # Specific logger level for matplotlib
+            import logging
+            logging.getLogger('matplotlib').setLevel(logging.ERROR)
+            logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
+
+        # Run the warning suppression
+        ignore_all_warnings()
+
+        # Return the warnings module for further configuration if needed
+        return warnings

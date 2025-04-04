@@ -921,7 +921,7 @@ def parse_args():
     # Attack parameters
     parser.add_argument('--attack_types', nargs='+', default=['fgsm', 'pgd'], 
                         help='Attack types to evaluate (default: fgsm pgd)')
-    parser.add_argument('--attack_eps', type=float, default=0.2, 
+    parser.add_argument('--attack_eps', type=float, default=0.05, 
                         help='Attack epsilon/strength parameter (default: 0.1)')
     
     # Pruning parameters

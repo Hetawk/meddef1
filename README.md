@@ -220,11 +220,7 @@ python main.py --data chest_xray --arch meddef1 --depth '{"meddef1": [1.0]}' --t
 
 python main.py --data chest_xray --arch resnet --depth '{"resnet": [18]}' --train_batch 32 --epochs 100 --lr 0.001 --optimizer sgd --scheduler StepLR --patience 30
 
-python main.py --experiment_mode --enable optim --data chest_xray --arch resnet --depth '{"resnet": [18]}' --train_batch 32 --epochs 100 --lr 0.01 --optimizer sgd --scheduler CosineAnnealingLR --min_lr 1e-6 --patience 30
 
-python main.py --experiment_mode --enable optim reg --data chest_xray --arch resnet --depth '{"resnet": [18]}' --train_batch 32 --epochs 100 --lr 0.01 --optimizer sgd --scheduler CosineAnnealingWarmRestarts --cycle_length 20 --drop 0.3 --weight_decay 5e-5 --patience 30 --min_epochs 50
-
-python main.py --experiment_mode --enable optim reg --data chest_xray --arch resnet --depth '{"resnet": [18]}' --train_batch 32 --epochs 100 --lr 0.01 --optimizer sgd --scheduler StepLR --drop 0.3 --weight_decay 5e-5 --early_stopping_metric accuracy --patience 30
 
 ```
 
@@ -315,5 +311,54 @@ python test.py --data chest_xray --arch meddef1 --depth "{'meddef1': [1.0]}" --m
 
 
 python test.py --data chest_xray --arch meddef1 --depth 1.0 --model_path "out/normal_training/chest_xray/meddef1_1.0/adv/save_model/best_meddef1_1.0_chest_xray_epochs100_lr5e-05_batch16_20250327.pth" --task_name normal_training
+
+```
+
+
+```bash
+
+# problem to work on when using 80/10/10
+# D:\coding_env\py\meddef\.venv\lib\site-packages\sklearn\metrics\_classification.py:2922: UserWarning: The y_pred values do not sum to one. Starting from 1.5 thiswill result in an error.  warnings.warn(
+
+
+python test.py --data chest_xray --arch meddef1 --depth 1.0 --model_path "out/normal_training/chest_xray/meddef1_1.0/adv/save_model/best_meddef1_1.0_chest_xray_epochs100_lr5e-05_batch32_20250402.pth"
+
+
+python evaluate_attacks.py --data chest_xray --arch meddef1 --depth 1.0 --model_path "out/normal_training/chest_xray/meddef1_1.0/adv/save_model/best_meddef1_1.0_chest_xray_epochs100_lr5e-05_batch32_20250402.pth" --attack_types fgsm pgd bim jsma --attack_eps 0.05 --prune_rates 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 --batch_size 64 --num_workers 4 --pin_memory --gpu-ids 1
+
+python -m loader.saliency_generator --data chest_xray --arch meddef1 --depth 1.0 --model_path "out/normal_training/chest_xray/meddef1_1.0/adv/save_model/best_meddef1_1.0_chest_xray_epochs100_lr5e-05_batch32_20250402.pth"  --image_path "out/normal_training/chest_xray/resnet_18/attack/pgd/sample_4_orig.png" "out/normal_training/chest_xray/meddef1_1.0/attack/pgd/sample_3_orig.png" "out/normal_training/chest_xray/meddef1_1.0/attack/pgd/sample_0_orig.png"
+
+
+
+python test.py --data chest_xray --arch resnet --depth 18 --model_path "out/normal_training/chest_xray/resnet_18/adv/save_model/best_resnet_18_chest_xray_epochs100_lr5e-05_batch32_20250330.pth"
+
+python evaluate_attacks.py --data chest_xray --arch resnet --depth 18 --model_path "out/normal_training/chest_xray/resnet_18/adv/save_model/best_resnet_18_chest_xray_epochs100_lr5e-05_batch32_20250330.pth" --attack_types fgsm pgd bim jsma --attack_eps 0.05 --prune_rates 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 --batch_size 64 --num_workers 4 --pin_memory --gpu-ids 1
+
+python -m loader.saliency_generator --data chest_xray --arch resnet --depth 18 --model_path "out/normal_training/chest_xray/resnet_18/adv/save_model/best_resnet_18_chest_xray_epochs100_lr5e-05_batch32_20250330.pth"  --image_path "out/normal_training/chest_xray/resnet_18/attack/pgd/sample_4_orig.png" "out/normal_training/chest_xray/meddef1_1.0/attack/pgd/sample_3_orig.png" "out/normal_training/chest_xray/meddef1_1.0/attack/pgd/sample_0_orig.png"
+
+
+
+python test.py --data chest_xray --arch resnet --depth 34 --model_path "out/normal_training/chest_xray/resnet_34/adv/save_model/best_resnet_34_chest_xray_epochs100_lr5e-05_batch32_20250330.pth"
+
+python evaluate_attacks.py --data chest_xray --arch resnet --depth 34 --model_path "out/normal_training/chest_xray/resnet_34/adv/save_model/best_resnet_34_chest_xray_epochs100_lr5e-05_batch32_20250330.pth" --attack_types fgsm pgd bim jsma --attack_eps 0.05 --prune_rates 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 --batch_size 64 --num_workers 4 --pin_memory --gpu-ids 1
+
+python -m loader.saliency_generator --data chest_xray --arch resnet --depth 34 --model_path "out/normal_training/chest_xray/resnet_34/adv/save_model/best_resnet_34_chest_xray_epochs100_lr5e-05_batch32_20250330.pth"  --image_path "out/normal_training/chest_xray/resnet_18/attack/pgd/sample_4_orig.png" "out/normal_training/chest_xray/meddef1_1.0/attack/pgd/sample_3_orig.png" "out/normal_training/chest_xray/meddef1_1.0/attack/pgd/sample_0_orig.png"
+
+
+
+
+python test.py --data chest_xray --arch densenet --depth 121 --model_path "out/normal_training/chest_xray/densenet_121/adv/save_model/best_densenet_121_chest_xray_epochs100_lr5e-05_batch32_20250331.pth"
+
+python evaluate_attacks.py --data chest_xray --arch densenet --depth 121 --model_path "out/normal_training/chest_xray/densenet_121/adv/save_model/best_densenet_121_chest_xray_epochs100_lr5e-05_batch32_20250331.pth" --attack_types fgsm pgd bim jsma --attack_eps 0.05 --prune_rates 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 --batch_size 64 --num_workers 4 --pin_memory --gpu-ids 1
+
+python -m loader.saliency_generator --data chest_xray  --arch densenet --depth 121 --model_path "out/normal_training/chest_xray/densenet_121/adv/save_model/best_densenet_121_chest_xray_epochs100_lr5e-05_batch32_20250331.pth"  --image_path "out/normal_training/chest_xray/resnet_18/attack/pgd/sample_4_orig.png" "out/normal_training/chest_xray/meddef1_1.0/attack/pgd/sample_3_orig.png" "out/normal_training/chest_xray/meddef1_1.0/attack/pgd/sample_0_orig.png"
+
+
+
+python test.py --data chest_xray --arch vgg --depth 16 --model_path "out/normal_training/chest_xray/vgg_16/adv/save_model/best_vgg_16_chest_xray_epochs100_lr5e-05_batch32_20250331.pth"
+
+python evaluate_attacks.py --data chest_xray --arch vgg --depth 16 --model_path "out/normal_training/chest_xray/vgg_16/adv/save_model/best_vgg_16_chest_xray_epochs100_lr5e-05_batch32_20250331.pth" --attack_types fgsm pgd bim jsma --attack_eps 0.05 --prune_rates 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 --batch_size 64 --num_workers 4 --pin_memory --gpu-ids 1
+
+python -m loader.saliency_generator --data chest_xray  --arch vgg --depth 16 --model_path "out/normal_training/chest_xray/vgg_16/adv/save_model/best_vgg_16_chest_xray_epochs100_lr5e-05_batch32_20250331.pth"  --image_path "out/normal_training/chest_xray/resnet_18/attack/pgd/sample_4_orig.png" "out/normal_training/chest_xray/meddef1_1.0/attack/pgd/sample_3_orig.png" "out/normal_training/chest_xray/meddef1_1.0/attack/pgd/sample_0_orig.png"
 
 ```

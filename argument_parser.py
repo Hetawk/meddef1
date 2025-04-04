@@ -234,11 +234,11 @@ def parse_args():
                     f"Please use valid JSON format like: --depth '{{\"transformer\": [\"tiny\"]}}'")
                 raise
 
-    # Ensure patience doesn't exceed maximum
-    if hasattr(args, 'patience') and args.patience > 25:
-        logging.warning(
-            f"Patience value {args.patience} exceeds maximum (25). Setting to 25.")
-        args.patience = 25
+    # # Ensure patience doesn't exceed maximum
+    # if hasattr(args, 'patience') and args.patience > 25:
+    #     logging.warning(
+    #         f"Patience value {args.patience} exceeds maximum (25). Setting to 25.")
+    #     args.patience = 25
 
     # Configure CUDA devices
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu_ids

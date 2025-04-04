@@ -5,30 +5,32 @@ import sys
 
 
 def configure_matplotlib_backend():
-    """
-    Configure matplotlib backend to avoid tkinter thread errors.
+    """Configure matplotlib backend appropriately for the environment"""
+    try:
+        # Set environment variable to avoid issues
+        os.environ['MPLCONFIGDIR'] = os.path.join(
+            os.path.expanduser('~'), '.matplotlib')
 
-    This should be called at the start of the application before
-    any other matplotlib imports or usage.
-    """
-    # Check if we're running in interactive mode or in a script
-    is_interactive = hasattr(sys, 'ps1')
+        # Force non-interactive backend
+        import matplotlib
+        matplotlib.use('Agg')
+        logging.info("Setting matplotlib backend to 'Agg'")
 
-    # Determine appropriate backend
-    if os.environ.get('DISPLAY') is None or 'pytest' in sys.modules:
-        # No display available or running in test environment
-        backend = 'Agg'  # Non-interactive backend
-    elif not is_interactive:
-        # Running as a script - use Agg to avoid thread issues
-        backend = 'Agg'
-    else:
-        # Interactive mode - let matplotlib choose
-        backend = None
+        # Import pyplot after backend is set
+        import matplotlib.pyplot as plt
 
-    # Set backend if specified
-    if backend:
-        logging.info(f"Setting matplotlib backend to '{backend}'")
-        matplotlib.use(backend, force=True)
+        # Configure to suppress warnings
+        plt.rcParams['figure.max_open_warning'] = 0
 
-    # Return selected backend
-    return matplotlib.get_backend()
+        # Set default DPI for better image quality
+        plt.rcParams['figure.dpi'] = 100
+        plt.rcParams['savefig.dpi'] = 150
+
+        # Disable info logging from matplotlib
+        logging.getLogger('matplotlib').setLevel(logging.WARNING)
+        logging.getLogger('matplotlib.category').setLevel(logging.ERROR)
+
+        return True
+    except Exception as e:
+        logging.error(f"Error configuring matplotlib: {e}")
+        return False

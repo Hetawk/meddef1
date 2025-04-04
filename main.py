@@ -1,3 +1,4 @@
+import warnings
 from argument_parser import parse_args
 from utils.task_handler import TaskHandler
 from utils.logger import setup_logger
@@ -8,9 +9,23 @@ import os
 import logging
 import utils.pandas_patch
 from utils.matplotlib_config import configure_matplotlib_backend
+from utils.file_handler import FileHandler
 
 # Configure matplotlib backend before any other imports that might use matplotlib
 configure_matplotlib_backend()
+
+# Suppress ALL warnings right from the start
+warnings.filterwarnings("ignore")
+
+# Apply visualization patch
+try:
+    from utils.visual.visualization_patch import patch_visualization
+    patch_visualization()
+except:
+    pass
+
+# Suppress common warnings
+FileHandler.suppress_warnings()
 
 
 def setup_environment(args):
