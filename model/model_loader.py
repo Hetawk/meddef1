@@ -4,13 +4,8 @@ import os
 import torch
 import logging
 
-from model.backbone.cbam.resnet_cbam import get_resnet_with_cbam
 from model.backbone.resnet import get_resnet
-from model.backbone.resnext import get_resnext
-from model.backbone.mobilenet import get_mobilenet
 from model.backbone.densenet import get_densenet
-from model.backbone.transformer import get_transformer
-from model.meddef.meddef2 import get_meddef2
 from model.backbone.vgg import get_vgg
 from model.attention.MSARNet import MSARNet
 from model.meddef.meddef1 import get_meddef1
@@ -28,14 +23,8 @@ class ModelLoader:
         self.models_dict = {
             'resnet': {'func': get_resnet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'densenet': {'func': get_densenet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
-            'resnext': {'func': get_resnext, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
-            'mobilenet': {'func': get_mobilenet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
             'vgg': {'func': get_vgg, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
-            'msarnet': {'func': MSARNet, 'params': ['depth', 'pretrained', 'input_channels', 'num_classes']},
-            'cbam_resnet': {'func': get_resnet_with_cbam, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
             'meddef1': {'func': get_meddef1, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
-            'meddef2': {'func': get_meddef2, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']},
-            'transformer': {'func': get_transformer, 'params': ['depth', 'input_channels', 'num_classes', 'robust_method']}
         }
         logging.info("ModelLoader initialized with models: " +
                      ", ".join(self.models_dict.keys()))
