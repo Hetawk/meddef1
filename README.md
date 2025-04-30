@@ -1,6 +1,12 @@
-# MedDef
+# MedDef: An Efficient Self-Attention Model for Adversarial Resilience in Medical Imaging with Unstructured Pruning
 
 MedDef is a machine learning project designed to modularize model training in a scalable way, with a particular focus on adversarial resilience in medical imaging. The project aims to provide robust defense mechanisms against adversarial attacks in medical image analysis, ensuring the reliability and accuracy of machine learning models in critical healthcare applications.
+
+## Model Architecture
+
+The MedDef architecture incorporates a Defense-Aware Attention Mechanism (DAAM) with strategic unstructured pruning to achieve robust adversarial resilience.
+
+![MedDef Architecture](meddef.jpg)
 
 ## Features
 
@@ -53,7 +59,7 @@ python main.py --data <dataset> --task_name <task> --epochs <num> --train_batch 
 - `--test_split`: Proportion of test data
 - `--verify_classes`: Verify classes in the dataset, it helps ensure that the dataset is correctly structured and contains the expected classes. Note that passing this argument will not process the dataset. Instead it will only verify the classes.
 - `--num_workers`: Number of workers for data loading
-- 
+-
 
 ## Project Structure
 
@@ -65,7 +71,7 @@ python main.py --data <dataset> --task_name <task> --epochs <num> --train_batch 
 - `test.py`: Script for testing trained models
 - `evaluate_attacks.py`: Script for evaluating model robustness against attacks
 - `dataset_processing.py`: Script for processing datasets
--  `out/`: A dedicated dir where all outputs like visualization, model checkpoint, csv and txt files are save.
+- `out/`: A dedicated dir where all outputs like visualization, model checkpoint, csv and txt files are save.
 - `processed_data/`: A dedicated dir where all processed data is saved.
 - `out/attack_evaluation`: A directory where the results of the attack evaluation are saved. This includes the results of the adversarial attacks on the model, such as Model Accuracy, Attack Success Rate (ASR) under different prunning condition and more.
 - `out/saliency_maps`: A directory where the saliency maps generated for the images are saved. Saliency maps are visual representations of the regions in an image that are most important for the model's predictions.
@@ -102,7 +108,7 @@ python main.py --data chest_xray --arch densenet --depth '{"densenet": [121]}' -
 ### Adversarial Training
 
 ```bash
-# MedDef with adversarial training 
+# MedDef with adversarial training
 python main.py --data chest_xray --arch meddef1 --depth '{"meddef1": [1.0]}' --train_batch 32 --epochs 100 --lr 0.0001 --drop 0.5 --gpu-ids 0 --pin_memory --weight_decay 1e-4 --adversarial --attack_eps 0.1 --adv_weight 0.5 --attack_type pgd --task_name normal_training --optimizer adam
 
 # MedDef with adversarial training with different lr
@@ -161,3 +167,9 @@ Contributions are welcome! Please feel free to submit a pull request or open an 
 ## License
 
 This project is licensed under the MIT License. See the `LICENSE` file for more details.
+
+## Support
+
+If you find this project useful, please consider giving it a star on GitHub! Your support helps us improve and maintain this project.
+
+[![GitHub stars](https://img.shields.io/github/stars/hetawk/meddef1.svg?style=social&label=Star)](https://github.com/hetawk/meddef1)
